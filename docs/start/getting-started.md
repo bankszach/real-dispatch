@@ -1,23 +1,29 @@
 ---
-summary: "Get a local Real Dispatch environment running quickly."
+summary: "Get a local Real Dispatch environment running with locked control-plane/data-plane boundaries."
 read_when:
   - First-time setup
-  - Validating control-plane and dispatch-data-plane separation
+  - Validating baseline architecture before feature work
 title: "Getting Started"
 ---
 
 # Getting Started
 
-Goal: run a local Real Dispatch environment with control-plane connectivity and dispatch-oriented docs in place.
+Goal: run local OpenClaw control-plane runtime and prepare the repository for dispatch-first implementation.
 
 ## Prereqs
 
-- Node 22 or newer
+- Node 22+
 - pnpm
+- Docker (recommended for local stack orchestration)
 
 ## Quick setup
 
 <Steps>
+  <Step title="Create local env file">
+    ```bash
+    cp .env.example .env
+    ```
+  </Step>
   <Step title="Install dependencies">
     ```bash
     pnpm install
@@ -28,28 +34,34 @@ Goal: run a local Real Dispatch environment with control-plane connectivity and 
     pnpm build
     ```
   </Step>
-  <Step title="Start the gateway control plane">
+  <Step title="Run control plane">
     ```bash
     pnpm openclaw gateway --port 18789 --verbose
     ```
   </Step>
-  <Step title="Open the dashboard">
+  <Step title="Open control UI">
     ```bash
     pnpm openclaw dashboard
     ```
   </Step>
 </Steps>
 
-## What to verify first
+## Full dispatch topology (optional, recommended for product work)
 
-- control plane is reachable
-- intake and scheduling flows are represented as job lifecycle states
-- actions are writing audit events
-- closeout gates require evidence before completion
+```bash
+pnpm dispatch:stack:up
+pnpm dispatch:stack:status
+```
+
+## Validate lock-in before building features
+
+- lifecycle model matches `new -> ... -> closed`
+- role boundaries match `/AGENTS.md`
+- only closed dispatch tools are planned for state mutations
+- every state mutation path is designed to emit audit events
 
 ## Next steps
 
-- Dispatch setup guide: [Dispatch Setup Guide](/start/openclaw)
-- Product framing and glossary: [Real Dispatch](/)
-- Migration architecture detail: [OpenClaw reuse plan](/concepts/openclaw-reuse-plan)
-- Operational security controls: [Gateway security](/gateway/security)
+- [Dispatch setup guide](/start/openclaw)
+- [Dispatch contracts RFC](/rfcs/0001-dispatch-core-contracts-v0)
+- [OpenClaw reuse plan](/concepts/openclaw-reuse-plan)

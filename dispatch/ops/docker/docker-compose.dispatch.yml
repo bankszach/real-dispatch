@@ -1,0 +1,80 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    restart: unless-stopped
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
+
+  dispatch-api:
+    image: ${DISPATCH_API_IMAGE:-real-dispatch-api:local}
+    restart: unless-stopped
+    environment:
+      DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
+      DISPATCH_OBJECT_STORE_ENDPOINT: ${DISPATCH_OBJECT_STORE_ENDPOINT:-http://minio:9000}
+      DISPATCH_OBJECT_STORE_BUCKET: ${DISPATCH_OBJECT_STORE_BUCKET:-dispatch-artifacts}
+      DISPATCH_OBJECT_STORE_KEY: ${DISPATCH_OBJECT_STORE_KEY:-minioadmin}
+      DISPATCH_OBJECT_STORE_SECRET: ${DISPATCH_OBJECT_STORE_SECRET:-minioadmin}
+    depends_on:
+      - postgres
+      - minio
+    ports:
+      - "${DISPATCH_API_PORT:-8080}:8080"
+
+  dispatch-worker:
+    image: ${DISPATCH_WORKER_IMAGE:-real-dispatch-worker:local}
+    restart: unless-stopped
+    environment:
+      DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
+      DISPATCH_API_URL: ${DISPATCH_API_URL:-http://dispatch-api:8080}
+    depends_on:
+      - dispatch-api
+      - postgres
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dispatch
+      POSTGRES_PASSWORD: dispatch
+      POSTGRES_DB: dispatch
+    volumes:
+      - dispatch-postgres:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${DISPATCH_OBJECT_STORE_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${DISPATCH_OBJECT_STORE_SECRET:-minioadmin}
+    volumes:
+      - dispatch-minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+volumes:
+  dispatch-postgres:
+  dispatch-minio:

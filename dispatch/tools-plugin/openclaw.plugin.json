@@ -1,0 +1,30 @@
+{
+  "id": "dispatch-tools",
+  "name": "Real Dispatch Tools",
+  "description": "Closed dispatch tool bridge from OpenClaw control plane to dispatch-api.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["baseUrl"],
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Dispatch API base URL"
+      },
+      "token": {
+        "type": "string",
+        "description": "Optional bearer token for dispatch API"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "default": 10000
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": { "label": "Dispatch API URL", "placeholder": "http://dispatch-api:8080" },
+    "token": { "label": "Dispatch API Token", "sensitive": true },
+    "timeoutMs": { "label": "Request Timeout (ms)" }
+  }
+}

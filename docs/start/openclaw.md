@@ -1,100 +1,80 @@
 ---
-summary: "End-to-end setup guide for Real Dispatch operations."
+summary: "End-to-end dispatch setup policy for Real Dispatch on the OpenClaw scaffold."
 read_when:
   - Setting up a dispatch-focused deployment
-  - Validating intake, scheduling, technician loop, and closeout workflow
+  - Enforcing lifecycle and role boundaries
 title: "Dispatch Setup Guide"
 ---
 
 # Dispatch Setup Guide
 
-> This guide keeps the legacy path `/start/openclaw` for link compatibility.
+> This page keeps the legacy `/start/openclaw` path for compatibility.
 
-Use this setup when you want Real Dispatch to operate as an always-on dispatch engine for a service company.
+## Locked architecture
 
-Architecture and migration rationale: [OpenClaw reuse plan](/concepts/openclaw-reuse-plan).
+- OpenClaw: control plane only.
+- Real Dispatch: data plane and source-of-truth case file.
 
 ## Safety baseline
 
-- closed toolset only
-- no public skill marketplace
-- no arbitrary shell or OS execution by default
-- system-of-record case file required for all state transitions
-- full audit trail for every state-changing action
+- closed dispatch toolset only
+- no public skill marketplace in production
+- no arbitrary shell/OS execution for production dispatch roles
+- system-of-record case file required for every state transition
+- full immutable audit trail for every mutation
 
-## Prerequisites
-
-- Node 22+
-- running gateway control plane
-- configured database and object storage for case files and attachments
-
-## Quick bootstrap
-
-<Steps>
-  <Step title="Install dependencies">
-    ```bash
-    pnpm install
-    ```
-  </Step>
-  <Step title="Build the workspace">
-    ```bash
-    pnpm build
-    ```
-  </Step>
-  <Step title="Start local gateway for development">
-    ```bash
-    pnpm openclaw gateway --port 18789 --verbose
-    ```
-  </Step>
-  <Step title="Open operator surface">
-    ```bash
-    pnpm openclaw dashboard
-    ```
-  </Step>
-</Steps>
-
-## Configure the dispatch lifecycle
-
-Required lifecycle:
+## Canonical lifecycle
 
 `new -> triaged -> schedulable -> scheduled -> dispatched -> onsite -> closeout_pending -> closed`
 
-Do not allow direct transition to `closed` without closeout validation.
+Direct `new -> closed` or any bypass transition is invalid.
 
-## Agent role boundaries
+## Role boundaries
 
-- **Intake Agent**: intake normalization and triage only
-- **Scheduling Agent**: slotting, assignment, confirmation, reschedule
-- **Technician Liaison Agent**: onsite communication and evidence capture
-- **Closeout Agent**: closeout packet and invoice draft generation
+- **Intake Agent**: create/triage/schedulability only.
+- **Scheduling Agent**: slot/confirm/assign/dispatch only.
+- **Technician Liaison Agent**: onsite communication + evidence + closeout_pending.
+- **Closeout Agent**: checklist validation + closeout artifacts + closure.
 
-Keep permissions role-scoped and explicit.
+## Required case-file fields
 
-## Data requirements
-
-Every job case file should include:
-
-- customer identity and contact
-- site/location details
-- issue classification and urgency
-- schedule and assignment history
-- technician timeline updates
-- attachments (photos, forms, notes)
+- ticket/job id
+- customer profile + contact
+- service location
+- issue summary + classification
+- schedule history + assignment history
+- technician updates timeline
+- attachments (photos/documents)
 - closeout checklist status
 - invoice draft fields
-- audit trail
+- immutable audit trail
 
-## Operational checks
+## Closed mutation actions (v0)
+
+- `ticket.create`
+- `ticket.add_message`
+- `ticket.set_priority`
+- `schedule.propose_slots`
+- `schedule.confirm`
+- `dispatch.assign_tech`
+- `dispatch.set_eta`
+- `closeout.add_note`
+- `closeout.add_photo`
+- `closeout.checklist_complete`
+- `billing.generate_invoice_draft`
+- `billing.compile_closeout_packet`
+
+## Operational checks before rollout
 
 ```bash
 pnpm openclaw status --all
 pnpm openclaw health --json
 ```
 
-Before production rollout, verify:
+Confirm:
 
-- intake messages become structured tickets
-- scheduling emits customer confirmation and assignment events
-- onsite evidence is attached to case files
-- closeout packet generation blocks when evidence is incomplete
-- audit timeline is complete and attributable
+- inbound requests normalize into structured tickets
+- schedule actions produce assignment and confirmation artifacts
+- onsite evidence is attached before closeout
+- closure is blocked until checklist gates pass
+- every state change is replayable in audit history

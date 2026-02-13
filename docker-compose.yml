@@ -1,3 +1,6 @@
+# OpenClaw control-plane stack.
+# For full Real Dispatch topology (dispatch-api + postgres + minio + worker),
+# use dispatch/ops/docker/docker-compose.dispatch.yml.
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
