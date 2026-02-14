@@ -10,9 +10,12 @@ Real Dispatch uses OpenClaw as a control plane and keeps all operational truth i
 - Real Dispatch is the data plane: case files, transitions, audit trail, closeout artifacts, invoice drafts.
 - State changes happen only through a closed dispatch toolset backed by dispatch-api.
 
-## Canonical lifecycle
+## Operator Lifecycle (Phase Model)
 
 `new -> triaged -> schedulable -> scheduled -> dispatched -> onsite -> closeout_pending -> closed`
+
+Detailed dispatch-api enforcement states and phase mapping:
+- `dispatch/contracts/case-lifecycle-v1.md`
 
 ## Agent roles
 

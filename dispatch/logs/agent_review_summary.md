@@ -8,7 +8,7 @@ Generated from:
 - `ai_dispatch_agile_project_package/docs/03_System_Architecture.md`
 - `ai_dispatch_agile_project_package/docs/04_Data_Model.md`
 - `ai_dispatch_agile_project_package/docs/05_API_Spec_OpenAPI.yaml`
-- `ai_dispatch_agile_project_package/backlog/backlog_v0.csv`
+- `ai_dispatch_agile_project_package/backlog/backlog.csv`
 - `ai_dispatch_agile_project_package/backlog/acceptance_criteria_checklist.md`
 - `ai_dispatch_agile_project_package/docs/11_Decision_Register.md`
 - `ai_dispatch_agile_project_package/schemas/audit_event.schema.json`

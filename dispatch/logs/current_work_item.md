@@ -3,6 +3,9 @@
 ## Story ID
 `MVP-03`
 
+## Canonical Backlog
+`ai_dispatch_agile_project_package/backlog/backlog.csv`
+
 ## Epic
 `EPIC-MVP-02: Security Hardening`
 

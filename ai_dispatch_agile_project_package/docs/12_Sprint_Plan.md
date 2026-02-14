@@ -1,31 +1,52 @@
-# Sprint Plan (Suggested Sequence)
+# Sprint Plan (Current MVP Sequence)
 
-## Sprint 0 — Scope lock + foundations (1 week)
-- Lock v0 PRD and state machine
-- Lock tool surface list and allowlist policy
-- Lock audit event schema and idempotency strategy
-- Create backlog and acceptance checklist
+**Updated:** February 14, 2026
 
-## Sprint 1 — dispatch-api spine + DB (2 weeks)
-- Implement schema + migrations
-- Implement core endpoints: create, triage, schedule confirm, dispatch
-- Implement audit events + timeline
-- Idempotency table + replay/conflict logic
-- Basic authz guardrails (role/tool/state)
+## 1) Delivery Baseline
 
-## Sprint 2 — Evidence + completion enforcement (2 weeks)
-- Evidence upload/reference model
-- Incident templates for top 6 door issues
-- Complete → verify flows with fail-closed behavior
-- Minimal worker/outbox (optional) or synchronous verification
+- v0 implementation phase is complete (`STORY-01` through `STORY-10`).
+- MVP parity phase is partially complete (`MVP-01`, `MVP-02` complete).
+- Active critical-path item is `MVP-03` (Security Hardening).
 
-## Sprint 3 — Tool bridge + E2E proof (2 weeks)
-- Implement tool handlers and allowlist config
-- Build deterministic E2E harness for canonical scenario
-- CI gate: E2E must pass
+## 2) Sprint M2 (Week of February 17, 2026)
 
-## Sprint 4 — Ops cockpit MVP + observability (2 weeks)
-- Dispatcher queue + timeline view (minimal UI)
-- Structured logs + basic metrics + runbooks
-- Hardening pass (security review)
+In scope:
+- `MVP-03` Production authn/authz claims integration
+- `MVP-04` Signature + evidence hardening
+- `MVP-05` CI blocking quality gates
 
+Planned sequence:
+1) Ship `MVP-03` first.
+2) Ship `MVP-04` against the new auth model.
+3) Ship `MVP-05` to lock release quality gates.
+
+Exit criteria:
+- Claims-based auth enabled with negative test coverage.
+- Signature/no-signature and evidence reference checks enforced fail-closed.
+- Dispatch suite + canonical E2E are blocking CI checks.
+
+## 3) Sprint M3 (Week of March 3, 2026)
+
+In scope:
+- `MVP-06` Operability hardening (durable metrics/log sinks, alerts, runbooks)
+- `MVP-07` Dispatcher + technician MVP build
+
+Exit criteria:
+- Runbooks validated in staging.
+- Core UI workflows use dispatch-api command endpoints only.
+
+## 4) Sprint M4 (Week of March 17, 2026)
+
+In scope:
+- `MVP-08` Pilot readiness and cutover
+
+Exit criteria:
+- UAT signoff complete.
+- Rollback rehearsal complete.
+- Release candidate freeze checklist complete.
+
+## 5) Tracking Rules
+
+- Active backlog source: `backlog/backlog.csv`.
+- Current work item marker: `dispatch/logs/current_work_item.md`.
+- Completion evidence log: `dispatch/logs/progress_log.md`.

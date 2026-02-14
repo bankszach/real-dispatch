@@ -7,9 +7,12 @@ This directory is the Real Dispatch product scaffold.
 - OpenClaw scaffold owns control-plane runtime in `/src`.
 - Real Dispatch product logic belongs under `/dispatch`.
 
-## Canonical lifecycle
+## Operator Lifecycle (Phase Model)
 
 `new -> triaged -> schedulable -> scheduled -> dispatched -> onsite -> closeout_pending -> closed`
+
+Detailed dispatch-api enforcement state mapping is defined in:
+- `dispatch/contracts/case-lifecycle-v1.md`
 
 ## Closed dispatch action surface
 

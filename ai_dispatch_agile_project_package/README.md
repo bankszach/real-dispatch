@@ -20,7 +20,9 @@ This package is designed to align with the orchestration patterns we discussed (
 - `docs/08_Observability_and_Runbooks.md` — logs/metrics/traces + on-call runbooks
 - `docs/09_Test_Strategy_and_E2E_Harness.md` — contract → integration → E2E acceptance chain
 - `docs/10_RACI_and_Deliverables.md` — ownership map across “expert roles”
-- `backlog/backlog_v0.csv` — agile backlog (epics/stories/tasks) importable to Jira/Linear/etc.
+- `docs/13_MVP_Execution_Handoff.md` — aligned MVP execution plan and engineering handoff packet
+- `backlog/backlog.csv` — single source-of-truth active backlog (outstanding work only), importable to Jira/Linear/etc.
+- `backlog/README.md` — backlog governance and update rules
 - `backlog/acceptance_criteria_checklist.md` — non-negotiable v0 acceptance list
 
 ### SOP library (starting point)
@@ -77,9 +79,12 @@ This package includes **templates**. You will still implement the actual service
 4. Wire your OpenClaw tool bridge to call `dispatch-api` (see `docs/06_*`).
 5. Make the E2E harness pass (`docs/09_*` + `backlog/acceptance_criteria_checklist.md`).
 
+Backlog governance:
+- Keep active backlog only in `backlog/backlog.csv`.
+- Do not duplicate backlog rows in status logs; status logs should reference the canonical backlog file.
+
 ---
 
 ## License / reuse
 
 This package is generated for your internal use; adapt freely.
-
