@@ -20,6 +20,10 @@ node dispatch/api/src/server.mjs
 - `POST /tickets/{ticketId}/schedule/propose`
 - `POST /tickets/{ticketId}/schedule/confirm`
 - `POST /tickets/{ticketId}/assignment/dispatch`
+- `POST /tickets/{ticketId}/assignment/recommend`
+- `POST /tickets/{ticketId}/schedule/hold`
+- `POST /tickets/{ticketId}/schedule/release`
+- `POST /tickets/{ticketId}/schedule/rollback`
 - `POST /tickets/{ticketId}/tech/check-in`
 - `POST /tickets/{ticketId}/tech/request-change`
 - `POST /tickets/{ticketId}/approval/decide`

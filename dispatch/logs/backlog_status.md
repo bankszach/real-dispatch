@@ -12,10 +12,10 @@ Backlog hygiene rules:
 
 Current active item:
 
-- `GLZ-01` (new commercial rollout phase, Sprint G1).
-- Last completed work: `MVP-08` (Pilot UAT and cutover readiness), with readiness gates signed off in the progress log.
+- `GLZ-04` (dispatch queue prioritization by region and urgency, with `GLZ-03` complete).
+- Last completed work: `GLZ-03` (intake-to-schedulable guardrails and SOP handoff requirements).
 
 Current planning cadence:
 
-- Active sprint focus: `Sprint G1`.
-- Active epic family: `EPIC-GZ-01` (Blind Intake Readiness) and `EPIC-GZ-02` (Scheduling and Commitment) bridge.
+- Active sprint focus: `Sprint G2`.
+- Active epic family: `EPIC-GZ-02` (Scheduling and Commitment) and `EPIC-GZ-01` follow-through.

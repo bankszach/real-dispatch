@@ -21,3 +21,4 @@ Runbook index:
 - `mvp_06_on_call_drill.md`
 - `mvp_08_pilot_cutover_readiness.md`
 - `mvp_launch_checkpoint.md` (recoverable startup/smoke-test snapshot)
+- `sprint_g2_scheduling_and_commitment.md`

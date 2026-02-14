@@ -30,6 +30,9 @@ import {
 
 const ticketRouteRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCHEDULING_STATES = Object.freeze(["READY_TO_SCHEDULE", "SCHEDULE_PROPOSED", "SCHEDULED"]);
+const PENDING_CUSTOMER_CONFIRMATION_STATE = "PENDING_CUSTOMER_CONFIRMATION";
+const HOLD_STATES = Object.freeze(["PENDING_CUSTOMER_CONFIRMATION"]);
+const SCHEDULING_LOCK_STATES = Object.freeze([...SCHEDULING_STATES, ...HOLD_STATES]);
 const AUTH_POLICY_ALERT_ERROR_CODES = new Set([
   "FORBIDDEN",
   "FORBIDDEN_SCOPE",
@@ -53,6 +56,7 @@ const VALID_TICKET_STATES = Object.freeze([
   "READY_TO_SCHEDULE",
   "SCHEDULE_PROPOSED",
   "SCHEDULED",
+  "PENDING_CUSTOMER_CONFIRMATION",
   "DISPATCHED",
   "ON_SITE",
   "IN_PROGRESS",
@@ -75,6 +79,134 @@ const PRIORITY_SORT_ORDER = Object.freeze({
   URGENT: 1,
   ROUTINE: 2,
 });
+const RECOMMENDATION_MATCH_WEIGHT = Object.freeze({
+  CAPABILITY: 1000,
+  ZONE_MATCH: 200,
+  OPEN_LOAD: 10,
+  QUALITY: 1,
+});
+const RECOMMENDATION_MATCH_FALLBACK_TECH_ID = "ff0d8f58-0000-4000-8000-000000000001";
+const RECOMMENDATION_DEFAULT_LIMIT = 5;
+const RECOMMENDATION_MAX_LIMIT = 20;
+const TECHNICIAN_DIRECTORY = Object.freeze([
+  {
+    tech_id: "00000000-0000-0000-0000-000000000083",
+    tech_name: "Dispatcher Tech 083",
+    service_types: [
+      "DOOR_WONT_LATCH",
+      "CANNOT_SECURE_ENTRY",
+      "ACCESS_CONTROL_FAULT",
+      "DOOR_PANEL_FAILURE",
+      "DEFAULT",
+    ],
+    zone: "CA",
+    active_load: 1,
+    quality_signal: 95,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000023",
+    tech_name: "Dispatcher Tech 023",
+    service_types: ["DOOR_WONT_LATCH", "ACCESS_CONTROL_FAULT", "DEFAULT"],
+    zone: "CA",
+    active_load: 2,
+    quality_signal: 90,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000033",
+    tech_name: "Dispatcher Tech 033",
+    service_types: ["DOOR_PANEL_FAILURE", "DEFAULT"],
+    zone: "CA",
+    active_load: 3,
+    quality_signal: 86,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000043",
+    tech_name: "Dispatcher Tech 043",
+    service_types: ["DOOR_WONT_LATCH", "CANNOT_SECURE_ENTRY", "DEFAULT"],
+    zone: "CA",
+    active_load: 5,
+    quality_signal: 81,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000053",
+    tech_name: "Dispatcher Tech 053",
+    service_types: ["CANNOT_SECURE_ENTRY", "DOOR_PANEL_FAILURE", "DEFAULT"],
+    zone: "CA",
+    active_load: 4,
+    quality_signal: 87,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000073",
+    tech_name: "Dispatcher Tech 073",
+    service_types: ["ACCESS_CONTROL_FAULT", "DOOR_WONT_LATCH", "DEFAULT"],
+    zone: "CA",
+    active_load: 2,
+    quality_signal: 90,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000099",
+    tech_name: "Dispatcher Tech 099",
+    service_types: ["DOOR_WONT_LATCH", "DEFAULT"],
+    zone: "CA",
+    active_load: 1,
+    quality_signal: 94,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000103",
+    tech_name: "Dispatcher Tech 103",
+    service_types: ["DOOR_PANEL_FAILURE", "DEFAULT"],
+    zone: "CA",
+    active_load: 3,
+    quality_signal: 85,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000105",
+    tech_name: "Dispatcher Tech 105",
+    service_types: ["ACCESS_CONTROL_FAULT", "CANNOT_SECURE_ENTRY", "DEFAULT"],
+    zone: "CA",
+    active_load: 2,
+    quality_signal: 92,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000123",
+    tech_name: "Dispatcher Tech 123",
+    service_types: ["DOOR_WONT_LATCH", "DOOR_PANEL_FAILURE", "DEFAULT"],
+    zone: "CA",
+    active_load: 6,
+    quality_signal: 84,
+    available: true,
+  },
+  {
+    tech_id: "00000000-0000-0000-0000-000000000083",
+    tech_name: "Dispatcher Tech 083 Backup",
+    service_types: ["DEFAULT"],
+    zone: "TX",
+    active_load: 8,
+    quality_signal: 75,
+    available: true,
+  },
+]);
+const HOLD_REASON_CODES = Object.freeze([
+  "CUSTOMER_PENDING",
+  "CUSTOMER_UNREACHABLE",
+  "CUSTOMER_CONFIRMATION_STALE",
+]);
+const HOLD_REASON_SET = new Set(HOLD_REASON_CODES);
+const MIN_REGION_WEIGHT = 10;
+const MAX_REGION_WEIGHT = 990;
+const DEFAULT_REGION_WEIGHT = 500;
+const HOLD_STATE_TO_TARGET = Object.freeze(["READY_TO_SCHEDULE", "SCHEDULE_PROPOSED", "SCHEDULED"]);
+const HOLD_REASON_REQUIRED_FIELDS = Object.freeze(["hold_reason", "confirmation_window"]);
+const HOLD_SNAPSHOT_ID_COLUMN = "id";
 const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   FORBIDDEN: "role",
   TOOL_NOT_ALLOWED: "tool",
@@ -88,11 +220,26 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   LOW_CLASSIFICATION_CONFIDENCE: "identity",
   SOP_HANDOFF_REQUIRED: "policy",
   BLIND_INTAKE_VALIDATION_FAILED: "identity",
+  ASSIGNMENT_NOT_FOUND: "assignment",
+  ASSIGNMENT_CAPABILITY_MISMATCH: "assignment",
+  ASSIGNMENT_ZONE_MISMATCH: "assignment",
+  TECH_UNAVAILABLE: "assignment",
+  ASSIGNMENT_RECOMMENDATION_MISMATCH: "assignment",
+  QUEUE_PRIORITY_UNRESOLVABLE: "queue",
+  SLA_CALCULATION_ERROR: "sla",
+  CUSTOMER_CONFIRMATION_STALE: "scheduling",
+  SCHEDULE_HOLD_STATE_CONFLICT: "scheduling",
+  HOLD_CONFIRMATION_MISSING: "scheduling",
+  HOLD_SNAPSHOT_MISSING: "scheduling",
 });
 const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "schedule_propose", tool_name: "schedule.propose" }),
   Object.freeze({ action_id: "schedule_confirm", tool_name: "schedule.confirm" }),
   Object.freeze({ action_id: "dispatch_assignment", tool_name: "assignment.dispatch" }),
+  Object.freeze({ action_id: "recommend_technicians", tool_name: "assignment.recommend" }),
+  Object.freeze({ action_id: "hold_schedule", tool_name: "schedule.hold" }),
+  Object.freeze({ action_id: "release_schedule", tool_name: "schedule.release" }),
+  Object.freeze({ action_id: "rollback_schedule", tool_name: "schedule.rollback" }),
   Object.freeze({ action_id: "open_timeline", tool_name: "ticket.timeline" }),
   Object.freeze({ action_id: "open_technician_packet", tool_name: "tech.job_packet" }),
 ]);
@@ -266,6 +413,8 @@ function createMetricsRegistry(options = {}) {
   const transitionsTotal = new Map();
   let idempotencyReplayTotal = 0;
   let idempotencyConflictTotal = 0;
+  let dispatchAssignmentsWithSnapshotTotal = 0;
+  let dispatchAssignmentsWithoutSnapshotTotal = 0;
   const onChange = typeof options.onChange === "function" ? options.onChange : null;
 
   function incrementCounter(map, key) {
@@ -328,6 +477,8 @@ function createMetricsRegistry(options = {}) {
         transitions_total: transitions,
         idempotency_replay_total: idempotencyReplayTotal,
         idempotency_conflict_total: idempotencyConflictTotal,
+        dispatch_assignments_with_snapshot_total: dispatchAssignmentsWithSnapshotTotal,
+        dispatch_assignments_without_snapshot_total: dispatchAssignmentsWithoutSnapshotTotal,
       },
     };
   }
@@ -375,6 +526,14 @@ function createMetricsRegistry(options = {}) {
       idempotencyConflictTotal += 1;
       publishSnapshot();
     },
+    incrementDispatchWithSnapshot() {
+      dispatchAssignmentsWithSnapshotTotal += 1;
+      publishSnapshot();
+    },
+    incrementDispatchWithoutSnapshot() {
+      dispatchAssignmentsWithoutSnapshotTotal += 1;
+      publishSnapshot();
+    },
     snapshot() {
       return buildSnapshot();
     },
@@ -407,13 +566,13 @@ async function queryStuckSchedulingCount(pool, staleMinutes) {
         SELECT max(created_at) AS entered_at
         FROM ticket_state_transitions tr
         WHERE tr.ticket_id = t.id
-          AND tr.to_state = t.state
+        AND tr.to_state = t.state
       ) latest ON true
       WHERE t.state = ANY($1::ticket_state[])
         AND latest.entered_at IS NOT NULL
         AND latest.entered_at <= now() - ($2::int * interval '1 minute')
     `,
-    [SCHEDULING_STATES, staleMinutes],
+    [SCHEDULING_LOCK_STATES, staleMinutes],
   );
   return Number(result.rows[0]?.count ?? 0);
 }
@@ -706,6 +865,138 @@ async function getTicketForUpdate(client, ticketId) {
   return result.rows[0];
 }
 
+async function getTicketWithSiteForUpdate(client, ticketId) {
+  const result = await client.query(
+    `
+      SELECT
+        t.*,
+        s.region AS site_region
+      FROM tickets t
+      INNER JOIN sites s ON s.id = t.site_id
+      WHERE t.id = $1
+      FOR UPDATE
+    `,
+    [ticketId],
+  );
+  if (result.rowCount === 0) {
+    throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
+  }
+  return result.rows[0];
+}
+
+function parseOptionalUuid(value, fieldName) {
+  if (value == null || value === "") {
+    return null;
+  }
+  if (!isUuid(value)) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a valid UUID`);
+  }
+  return value;
+}
+
+function toIsoDateOrNull(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+function resolveHoldConfirmationWindowFromSnapshot(snapshotRow) {
+  if (!snapshotRow || typeof snapshotRow.hold_reason_notes !== "string") {
+    return null;
+  }
+
+  const details = parseHoldSnapshotReasonNotes(snapshotRow.hold_reason_notes);
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+
+  const confirmationWindow = details.confirmation_window;
+  if (
+    !confirmationWindow ||
+    typeof confirmationWindow !== "object" ||
+    typeof confirmationWindow.start !== "string" ||
+    typeof confirmationWindow.end !== "string"
+  ) {
+    return null;
+  }
+
+  const start = toIsoDateOrNull(confirmationWindow.start);
+  const end = toIsoDateOrNull(confirmationWindow.end);
+  if (start == null || end == null) {
+    return null;
+  }
+  return { start, end };
+}
+
+async function getLatestHoldSnapshot(client, ticketId) {
+  const result = await client.query(
+    `
+      SELECT
+        id,
+        hold_sequence_id,
+        hold_reason_code,
+        hold_state,
+        scheduled_start,
+        scheduled_end,
+        hold_reason_notes,
+        request_id,
+        correlation_id,
+        trace_id,
+        created_at
+      FROM schedule_hold_snapshots
+      WHERE ticket_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [ticketId],
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return result.rows[0];
+}
+
+async function getRecommendationSnapshot(client, recommendationSnapshotId, ticketId) {
+  const result = await client.query(
+    `
+      SELECT
+        id,
+        recommendation_snapshot_id,
+        recommended_tech_id,
+        candidates,
+        created_at
+      FROM assignment_recommendation_snapshots
+      WHERE ticket_id = $1
+        AND recommendation_snapshot_id = $2
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [ticketId, recommendationSnapshotId],
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return result.rows[0];
+}
+
+function resolveDispatchServiceType(params) {
+  const { ticket, recommendationSnapshot } = params;
+  const sourceType =
+    recommendationSnapshot?.incident_type ??
+    ticket?.incident_type ??
+    (ticket?.summary?.trim?.() || "DEFAULT");
+  return normalizeServiceType(sourceType);
+}
+
+function resolveHoldSnapshotId(snapshotRow) {
+  return snapshotRow?.hold_sequence_id ?? snapshotRow?.id ?? null;
+}
+
 function assertCommandStateAllowed(endpoint, fromState, body) {
   const policy = getCommandPolicy(endpoint);
   const allowedFromStates = policy.allowed_from_states;
@@ -715,21 +1006,6 @@ function assertCommandStateAllowed(endpoint, fromState, body) {
       from_state: fromState,
       to_state: policy.expected_to_state,
     });
-  }
-
-  if (endpoint === "/tickets/{ticketId}/assignment/dispatch" && fromState === "TRIAGED") {
-    const dispatchMode = typeof body.dispatch_mode === "string" ? body.dispatch_mode.trim() : null;
-    if (dispatchMode !== "EMERGENCY_BYPASS") {
-      throw new HttpError(
-        409,
-        "INVALID_STATE_TRANSITION",
-        "TRIAGED -> DISPATCHED requires explicit emergency bypass reason",
-        {
-          from_state: fromState,
-          to_state: policy.expected_to_state,
-        },
-      );
-    }
   }
 }
 
@@ -1245,7 +1521,7 @@ function toBlindIntakeEligibilityPayload(ticketRow, policy) {
   };
 }
 
-function assertReadyToScheduleGuard(ticket, body, policy) {
+function assertReadyToScheduleGuard(ticket, body, policy, correlationId = null) {
   const requestedSopAck = normalizeBoolean(
     body.sop_handoff_acknowledged,
     "sop_handoff_acknowledged",
@@ -1261,6 +1537,7 @@ function assertReadyToScheduleGuard(ticket, body, policy) {
         evidence: "identity_confidence_below_threshold",
         identity_confidence: context.identity_confidence,
         identity_threshold: context.identity_threshold,
+        correlation_id: correlationId,
       },
     );
   }
@@ -1273,6 +1550,7 @@ function assertReadyToScheduleGuard(ticket, body, policy) {
         evidence: "classification_confidence_below_threshold",
         classification_confidence: context.classification_confidence,
         classification_threshold: context.classification_threshold,
+        correlation_id: correlationId,
       },
     );
   }
@@ -1283,6 +1561,9 @@ function assertReadyToScheduleGuard(ticket, body, policy) {
       "SOP handoff acknowledgment is required before scheduling",
       {
         evidence: "sop_handoff_acknowledgment_missing",
+        sop_handoff_prompt: policy.sopHandoffPrompt,
+        identity_signature: ticket.identity_signature ?? null,
+        correlation_id: correlationId,
       },
     );
   }
@@ -1594,6 +1875,7 @@ async function buildDispatcherCockpitView(params) {
         state: row.state,
         priority: row.priority,
         incident_type: row.incident_type,
+        site_region: row.site_region,
         site: {
           id: row.site_id,
           name: row.site_name,
@@ -1604,6 +1886,7 @@ async function buildDispatcherCockpitView(params) {
         scheduled_start: row.scheduled_start ? new Date(row.scheduled_start).toISOString() : null,
         last_update_at: lastUpdateAt ? new Date(lastUpdateAt).toISOString() : null,
         last_transition_at: lastTransitionAt ? new Date(lastTransitionAt).toISOString() : null,
+        region_weight: regionWeightFromCode(row.site_region),
         ...sla,
         actions,
       };
@@ -1627,6 +1910,12 @@ async function buildDispatcherCockpitView(params) {
     const rightPriority = PRIORITY_SORT_ORDER[right.priority] ?? 9;
     if (leftPriority !== rightPriority) {
       return leftPriority - rightPriority;
+    }
+
+    const leftRegionWeight = left.region_weight ?? DEFAULT_REGION_WEIGHT;
+    const rightRegionWeight = right.region_weight ?? DEFAULT_REGION_WEIGHT;
+    if (leftRegionWeight !== rightRegionWeight) {
+      return leftRegionWeight - rightRegionWeight;
     }
 
     const leftUpdate = Date.parse(left.last_update_at ?? "");
@@ -1954,6 +2243,233 @@ function parseIsoDate(value, fieldName) {
     throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be ISO date-time`);
   }
   return parsed.toISOString();
+}
+
+function normalizeUppercaseString(value, fieldName) {
+  const normalized = normalizeOptionalString(value, fieldName);
+  return normalized.toUpperCase();
+}
+
+function normalizeServiceType(value) {
+  const normalized = normalizeUppercaseString(value, "service_type");
+  return normalized.replace(/_V\d+$/u, "");
+}
+
+function parseRecommendationLimit(value) {
+  if (value == null) {
+    return RECOMMENDATION_DEFAULT_LIMIT;
+  }
+  if (!Number.isInteger(value) || value < 1 || value > RECOMMENDATION_MAX_LIMIT) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "Field 'recommendation_limit' must be an integer between 1 and 20",
+    );
+  }
+  return value;
+}
+
+function parseHoldReason(value) {
+  return hasValidUppercaseValue(value, HOLD_REASON_SET, "hold_reason");
+}
+
+function parseHoldConfirmationLog(value) {
+  if (!isUuid(value)) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "Field 'customer_confirmation_log' must be a valid UUID",
+    );
+  }
+  return value;
+}
+
+function parseRollbackConfirmationId(value) {
+  if (!isUuid(value)) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'confirmation_id' must be a valid UUID");
+  }
+  return value;
+}
+
+function parseSchedulingWindow(value, fieldName) {
+  ensureObjectField(value, fieldName);
+  const start = parseIsoDate(value.start, `${fieldName}.start`);
+  const end = parseIsoDate(value.end, `${fieldName}.end`);
+
+  if (new Date(end).getTime() <= new Date(start).getTime()) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      `Field '${fieldName}.end' must be after ${fieldName}.start`,
+    );
+  }
+
+  return { start, end };
+}
+
+function hasValidUppercaseValue(value, allowedSet, fieldName) {
+  const normalized = normalizeUppercaseString(value, fieldName);
+  if (!allowedSet.has(normalized)) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' is invalid`);
+  }
+  return normalized;
+}
+
+function evaluateTechnicianCapabilityMatch(candidate, requestedServiceType) {
+  const normalizedServiceType = normalizeServiceType(requestedServiceType);
+  const serviceTypes = Array.isArray(candidate.service_types)
+    ? candidate.service_types.map((entry) =>
+        normalizeServiceType(typeof entry === "string" ? entry : String(entry)),
+      )
+    : [];
+  const normalizedSet = new Set(serviceTypes);
+
+  return normalizedSet.has("DEFAULT") || normalizedSet.has(normalizedServiceType);
+}
+
+function evaluateTechnicianZoneMatch(candidate, ticketRegion) {
+  if (typeof ticketRegion !== "string" || ticketRegion.trim() === "") {
+    return false;
+  }
+  return (candidate.zone || "").toUpperCase() === ticketRegion.toUpperCase();
+}
+
+function buildTechnicianRecommendationCandidates(params) {
+  const { ticketRegion, requestedServiceType, limit } = params;
+  const normalizedServiceType = normalizeServiceType(requestedServiceType);
+
+  const candidates = [];
+  for (const tech of TECHNICIAN_DIRECTORY) {
+    if (
+      !tech ||
+      !tech.tech_id ||
+      typeof tech.active_load !== "number" ||
+      typeof tech.quality_signal !== "number"
+    ) {
+      continue;
+    }
+
+    if (typeof tech.available !== "boolean" || !tech.available) {
+      continue;
+    }
+
+    const capabilityMatch = evaluateTechnicianCapabilityMatch(tech, normalizedServiceType);
+    const zoneMatch = evaluateTechnicianZoneMatch(tech, ticketRegion);
+    const score =
+      (capabilityMatch ? RECOMMENDATION_MATCH_WEIGHT.CAPABILITY : 0) +
+      (zoneMatch ? RECOMMENDATION_MATCH_WEIGHT.ZONE_MATCH : 0) +
+      (tech.active_load > 0 ? 0 - tech.active_load * RECOMMENDATION_MATCH_WEIGHT.OPEN_LOAD : 0) +
+      (tech.quality_signal || 0) * RECOMMENDATION_MATCH_WEIGHT.QUALITY;
+
+    candidates.push({
+      tech_id: tech.tech_id,
+      tech_name: tech.tech_name,
+      zone: tech.zone,
+      active_load: tech.active_load,
+      quality_signal: tech.quality_signal,
+      service_match: capabilityMatch,
+      zone_match: zoneMatch,
+      score,
+    });
+  }
+
+  const sortedCandidates = [...candidates].toSorted((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    if (left.active_load !== right.active_load) {
+      return left.active_load - right.active_load;
+    }
+    if (left.quality_signal !== right.quality_signal) {
+      return right.quality_signal - left.quality_signal;
+    }
+    if (left.zone_match !== right.zone_match) {
+      return right.zone_match ? 1 : -1;
+    }
+    return left.tech_id.localeCompare(right.tech_id);
+  });
+
+  return sortedCandidates.slice(0, limit);
+}
+
+function findTechnicianById(techId) {
+  return TECHNICIAN_DIRECTORY.find((entry) => entry.tech_id === techId) ?? null;
+}
+
+function parseHoldSnapshotReasonNotes(raw) {
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseHoldWindowFromSnapshot(snapshotRow, fieldName = "confirmation_window") {
+  const details = parseHoldSnapshotReasonNotes(snapshotRow?.hold_reason_notes);
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const confirmationWindow = details[fieldName];
+  if (
+    !confirmationWindow ||
+    typeof confirmationWindow !== "object" ||
+    typeof confirmationWindow.start !== "string" ||
+    typeof confirmationWindow.end !== "string"
+  ) {
+    return null;
+  }
+
+  const start = toIsoDateOrNull(confirmationWindow.start);
+  const end = toIsoDateOrNull(confirmationWindow.end);
+  if (start == null || end == null) {
+    return null;
+  }
+  return { start, end };
+}
+
+function isConfirmationWindowStale(window, nowAt = new Date()) {
+  if (!window || typeof window !== "object") {
+    return true;
+  }
+  const start = Date.parse(window.start);
+  const end = Date.parse(window.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return true;
+  }
+  const now = nowAt?.getTime?.() ?? Date.now();
+  return now < start || now > end;
+}
+
+function buildHoldReasonNotes(params) {
+  const { holdReason, holdSequenceId, confirmationWindow } = params;
+  return JSON.stringify({
+    hold_reason: holdReason,
+    hold_sequence_id: holdSequenceId,
+    confirmation_window: confirmationWindow,
+  });
+}
+
+function regionWeightFromCode(region) {
+  const normalized = typeof region === "string" ? region.trim().toUpperCase() : "";
+  if (normalized === "") {
+    return DEFAULT_REGION_WEIGHT;
+  }
+
+  let seed = 0;
+  for (let i = 0; i < normalized.length; i += 1) {
+    seed = (seed * 31 + normalized.charCodeAt(i)) % 100000;
+  }
+  const span = MAX_REGION_WEIGHT - MIN_REGION_WEIGHT;
+  return MIN_REGION_WEIGHT + (seed % (span + 1));
 }
 
 function assertTicketScope(authRuntime, actor, ticketLike) {
@@ -2476,9 +2992,20 @@ async function triageTicketMutation(client, context) {
     typeof existing.identity_signature === "string" && existing.identity_signature.trim() !== "";
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
+  if (targetState === existing.state && targetState === "TRIAGED") {
+    throw new HttpError(
+      409,
+      "INVALID_STATE_TRANSITION",
+      "Ticket is already triaged and no state transition was requested",
+      {
+        from_state: existing.state,
+        to_state: targetState,
+      },
+    );
+  }
 
   if (isBlindIntakeTicket && targetState === "READY_TO_SCHEDULE") {
-    assertReadyToScheduleGuard(existing, body, resolvedBlindIntakePolicy);
+    assertReadyToScheduleGuard(existing, body, resolvedBlindIntakePolicy, correlationId);
   }
 
   const update = await client.query(
@@ -2536,7 +3063,28 @@ async function triageTicketMutation(client, context) {
     );
   }
 
+  const isDirectReadyPath = targetState !== "TRIAGED" && existing.state === "TRIAGED";
   if (targetState === "TRIAGED") {
+    await insertAuditAndTransition(client, {
+      ticketId,
+      beforeState: existing.state,
+      afterState: targetState,
+      metrics,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/triage",
+        requested_at: nowIso(),
+        request: body,
+        workflow_outcome: targetState,
+      },
+    });
+  } else if (isDirectReadyPath) {
     await insertAuditAndTransition(client, {
       ticketId,
       beforeState: existing.state,
@@ -2734,11 +3282,107 @@ async function dispatchAssignmentMutation(client, context) {
   if (body.provider_id != null) {
     requireUuidField(body.provider_id, "provider_id");
   }
+  const dispatchMode =
+    body.dispatch_mode != null
+      ? normalizeOptionalString(body.dispatch_mode, "dispatch_mode")
+      : null;
+  const recommendationSnapshotId = parseOptionalUuid(
+    body.recommendation_snapshot_id,
+    "recommendation_snapshot_id",
+  );
 
-  const existing = await getTicketForUpdate(client, ticketId);
+  const existing = await getTicketWithSiteForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
-  const dispatchMode = typeof body.dispatch_mode === "string" ? body.dispatch_mode.trim() : null;
   assertCommandStateAllowed("/tickets/{ticketId}/assignment/dispatch", existing.state, body);
+
+  const recommendedSnapshot = recommendationSnapshotId
+    ? await getRecommendationSnapshot(client, recommendationSnapshotId, ticketId)
+    : null;
+  if (recommendationSnapshotId && !recommendedSnapshot) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_NOT_FOUND",
+      "Assignment recommendation snapshot was not found",
+      {
+        recommendation_snapshot_id: recommendationSnapshotId,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const selectedTech = findTechnicianById(body.tech_id);
+  if (!selectedTech) {
+    throw new HttpError(409, "ASSIGNMENT_NOT_FOUND", "Requested technician was not found", {
+      tech_id: body.tech_id,
+      recommendation_snapshot_id: recommendationSnapshotId,
+      correlation_id: correlationId,
+    });
+  }
+
+  if (!selectedTech.available) {
+    throw new HttpError(409, "TECH_UNAVAILABLE", "Requested technician is not available", {
+      tech_id: body.tech_id,
+      correlation_id: correlationId,
+    });
+  }
+
+  if (
+    recommendedSnapshot &&
+    recommendedSnapshot.recommended_tech_id &&
+    recommendedSnapshot.recommended_tech_id !== body.tech_id
+  ) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_RECOMMENDATION_MISMATCH",
+      "Requested technician does not match recommendation snapshot",
+      {
+        recommendation_snapshot_id: recommendationSnapshotId,
+        recommended_tech_id: recommendedSnapshot.recommended_tech_id,
+        tech_id: body.tech_id,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const requestedServiceType = resolveDispatchServiceType({
+    ticket: existing,
+    recommendationSnapshot: recommendedSnapshot,
+  });
+  const capabilityMatch = evaluateTechnicianCapabilityMatch(selectedTech, requestedServiceType);
+  if (!capabilityMatch) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_CAPABILITY_MISMATCH",
+      "Technician is not trained for requested service type",
+      {
+        tech_id: body.tech_id,
+        service_type: requestedServiceType,
+        correlation_id: correlationId,
+        recommendation_snapshot_id: recommendationSnapshotId,
+      },
+    );
+  }
+
+  const zoneMatch = evaluateTechnicianZoneMatch(selectedTech, existing.site_region);
+  if (!zoneMatch) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_ZONE_MISMATCH",
+      "Technician is not in the requested service region",
+      {
+        tech_id: body.tech_id,
+        ticket_region: existing.site_region ?? null,
+        correlation_id: correlationId,
+        recommendation_snapshot_id: recommendationSnapshotId,
+      },
+    );
+  }
+
+  if (recommendationSnapshotId != null) {
+    metrics.incrementDispatchWithSnapshot();
+  } else {
+    metrics.incrementDispatchWithoutSnapshot();
+  }
 
   const update = await client.query(
     `
@@ -2772,12 +3416,502 @@ async function dispatchAssignmentMutation(client, context) {
       requested_at: nowIso(),
       request: body,
       dispatch_mode: dispatchMode,
+      dispatch_validation: {
+        tech_id: body.tech_id,
+        selected_service_type: requestedServiceType,
+        recommendation_snapshot_id: recommendationSnapshotId,
+        matched_capability: true,
+        matched_zone: true,
+        dispatch_mode_deprecated: dispatchMode != null,
+      },
     },
   });
 
   return {
     status: 200,
     body: serializeTicket(ticket),
+  };
+}
+
+async function assignmentRecommendMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
+  ensureObject(body);
+  const serviceType = normalizeServiceType(body.service_type);
+  const recommendationLimit = parseRecommendationLimit(body.recommendation_limit);
+  const preferredWindow =
+    body.preferred_window == null
+      ? null
+      : parseSchedulingWindow(body.preferred_window, "preferred_window");
+
+  const existing = await getTicketWithSiteForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/assignment/recommend", existing.state, body);
+
+  const rankedCandidates = buildTechnicianRecommendationCandidates({
+    ticketRegion: existing.site_region,
+    requestedServiceType: serviceType,
+    limit: recommendationLimit,
+  });
+
+  const evaluatedCandidates = rankedCandidates.map((candidate) => ({
+    ...candidate,
+    distance_bucket: candidate.zone_match ? 0 : 1,
+  }));
+  const topRecommendation = evaluatedCandidates[0];
+  const recommendedTechId = topRecommendation
+    ? topRecommendation.tech_id
+    : RECOMMENDATION_MATCH_FALLBACK_TECH_ID;
+  const evaluatedAt = nowIso();
+
+  const snapshot = await client.query(
+    `
+      INSERT INTO assignment_recommendation_snapshots (
+        ticket_id,
+        recommended_tech_id,
+        ticket_state,
+        requested_by,
+        request_id,
+        correlation_id,
+        trace_id,
+        recommendation_limit,
+        incident_type,
+        site_region,
+        candidates
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      RETURNING id, recommendation_snapshot_id
+    `,
+    [
+      ticketId,
+      recommendedTechId,
+      existing.state,
+      actor.actorId,
+      requestId,
+      correlationId,
+      traceId,
+      recommendationLimit,
+      serviceType,
+      existing.site_region,
+      evaluatedCandidates,
+    ],
+  );
+  const snapshotRow = snapshot.rows[0];
+
+  const recommendations = evaluatedCandidates.map((candidate) => ({
+    tech_id: candidate.tech_id,
+    tech_name: candidate.tech_name,
+    score: candidate.score,
+    matches: {
+      capability: candidate.service_match,
+      zone: candidate.zone_match,
+      active_load: candidate.active_load,
+      distance_bucket: candidate.distance_bucket,
+    },
+  }));
+
+  await insertAuditEvent(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: existing.state,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/assignment/recommend",
+      requested_at: evaluatedAt,
+      request: body,
+      service_type: serviceType,
+      recommendation_limit: recommendationLimit,
+      recommendation_snapshot_id: snapshotRow.recommendation_snapshot_id,
+      candidate_count: recommendations.length,
+      preferred_window: preferredWindow,
+    },
+  });
+
+  return {
+    status: 201,
+    body: {
+      recommendations,
+      snapshot_id: snapshotRow.recommendation_snapshot_id,
+      evaluated_at: evaluatedAt,
+    },
+  };
+}
+
+async function holdScheduleMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const holdReason = parseHoldReason(body.hold_reason);
+  const confirmationWindow = parseSchedulingWindow(body.confirmation_window, "confirmation_window");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+
+  if (!HOLD_STATE_TO_TARGET.includes(existing.state)) {
+    throw new HttpError(
+      409,
+      "SCHEDULE_HOLD_STATE_CONFLICT",
+      "Ticket is not in a holdable scheduling state",
+      {
+        from_state: existing.state,
+        to_state: PENDING_CUSTOMER_CONFIRMATION_STATE,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const holdSequenceId = randomUUID();
+  const holdSnapshotInsert = await client.query(
+    `
+      INSERT INTO schedule_hold_snapshots (
+        ticket_id,
+        hold_sequence_id,
+        requested_by,
+        request_id,
+        correlation_id,
+        hold_reason_code,
+        hold_state,
+        scheduled_start,
+        scheduled_end,
+        hold_reason_notes
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      RETURNING id, hold_sequence_id, hold_state
+    `,
+    [
+      ticketId,
+      holdSequenceId,
+      actor.actorId,
+      requestId,
+      correlationId,
+      holdReason,
+      existing.state,
+      existing.scheduled_start ?? null,
+      existing.scheduled_end ?? null,
+      buildHoldReasonNotes({
+        holdReason,
+        confirmationWindow,
+        holdSequenceId,
+      }),
+    ],
+  );
+  const holdSnapshot = holdSnapshotInsert.rows[0];
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'PENDING_CUSTOMER_CONFIRMATION',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: PENDING_CUSTOMER_CONFIRMATION_STATE,
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/schedule/hold",
+      requested_at: nowIso(),
+      request: body,
+      hold_snapshot_id: holdSnapshot.id,
+      hold_sequence_id: holdSequenceId,
+      hold_reason: holdReason,
+      hold_state: holdSnapshot.hold_state,
+      confirmation_window: confirmationWindow,
+    },
+  });
+
+  return {
+    status: 201,
+    body: {
+      ticket: serializeTicket(ticket),
+      hold_id: holdSequenceId,
+      snapshot_id: holdSnapshot.id,
+      hold_state: holdSnapshot.hold_state,
+      confirmation_window: confirmationWindow,
+    },
+  };
+}
+
+async function releaseScheduleMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const confirmationLog = parseHoldConfirmationLog(body.customer_confirmation_log);
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  if (existing.state !== PENDING_CUSTOMER_CONFIRMATION_STATE) {
+    throw new HttpError(
+      409,
+      "SCHEDULE_HOLD_STATE_CONFLICT",
+      "Ticket is not awaiting customer confirmation",
+      {
+        from_state: existing.state,
+        to_state: "SCHEDULED",
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const latestHoldSnapshot = await getLatestHoldSnapshot(client, ticketId);
+  if (!latestHoldSnapshot) {
+    throw new HttpError(
+      409,
+      "HOLD_SNAPSHOT_MISSING",
+      "Customer confirmation cannot be released without a hold snapshot",
+      {
+        ticket_id: ticketId,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const holdId = resolveHoldSnapshotId(latestHoldSnapshot);
+  if (holdId !== confirmationLog) {
+    throw new HttpError(
+      409,
+      "HOLD_CONFIRMATION_MISSING",
+      "Customer confirmation log does not match hold identifier",
+      {
+        snapshot_id: latestHoldSnapshot.id,
+        hold_id: holdId,
+        confirmation_log: confirmationLog,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const confirmationWindow = resolveHoldConfirmationWindowFromSnapshot(latestHoldSnapshot);
+  if (isConfirmationWindowStale(confirmationWindow)) {
+    throw new HttpError(409, "CUSTOMER_CONFIRMATION_STALE", "Customer confirmation has expired", {
+      snapshot_id: latestHoldSnapshot.id,
+      hold_id: holdId,
+      confirmation_window: confirmationWindow,
+      correlation_id: correlationId,
+    });
+  }
+
+  const targetState = latestHoldSnapshot.hold_state;
+  if (!HOLD_STATE_TO_TARGET.includes(targetState)) {
+    throw new HttpError(
+      409,
+      "HOLD_SNAPSHOT_MISSING",
+      "Hold snapshot has an unsupported target state",
+      {
+        snapshot_id: latestHoldSnapshot.id,
+        hold_id: holdId,
+        target_state: targetState,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = $2,
+        scheduled_start = $3,
+        scheduled_end = $4,
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId, targetState, latestHoldSnapshot.scheduled_start, latestHoldSnapshot.scheduled_end],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: targetState,
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/schedule/release",
+      requested_at: nowIso(),
+      request: body,
+      hold_snapshot_id: latestHoldSnapshot.id,
+      hold_sequence_id: holdId,
+      confirmation_window: confirmationWindow,
+      restored_state: targetState,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(ticket),
+      hold_id: holdId,
+      snapshot_id: latestHoldSnapshot.id,
+      restored_state: targetState,
+      restored_window: {
+        start: latestHoldSnapshot.scheduled_start
+          ? new Date(latestHoldSnapshot.scheduled_start).toISOString()
+          : null,
+        end: latestHoldSnapshot.scheduled_end
+          ? new Date(latestHoldSnapshot.scheduled_end).toISOString()
+          : null,
+      },
+    },
+  };
+}
+
+async function rollbackScheduleMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const confirmationId = parseRollbackConfirmationId(body.confirmation_id);
+  const reason = normalizeOptionalString(body.reason, "reason");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  if (existing.state !== PENDING_CUSTOMER_CONFIRMATION_STATE) {
+    throw new HttpError(
+      409,
+      "SCHEDULE_HOLD_STATE_CONFLICT",
+      "Ticket is not awaiting customer confirmation",
+      {
+        from_state: existing.state,
+        to_state: "SCHEDULED",
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const latestHoldSnapshot = await getLatestHoldSnapshot(client, ticketId);
+  if (!latestHoldSnapshot) {
+    throw new HttpError(
+      409,
+      "HOLD_SNAPSHOT_MISSING",
+      "Customer confirmation rollback is not possible without a hold snapshot",
+      {
+        ticket_id: ticketId,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const holdId = resolveHoldSnapshotId(latestHoldSnapshot);
+  if (holdId !== confirmationId) {
+    throw new HttpError(
+      409,
+      "SCHEDULE_HOLD_STATE_CONFLICT",
+      "Rollback confirmation id does not match active hold snapshot",
+      {
+        snapshot_id: latestHoldSnapshot.id,
+        hold_id: holdId,
+        confirmation_id: confirmationId,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const confirmationWindow = resolveHoldConfirmationWindowFromSnapshot(latestHoldSnapshot);
+  if (isConfirmationWindowStale(confirmationWindow)) {
+    throw new HttpError(409, "CUSTOMER_CONFIRMATION_STALE", "Customer confirmation has expired", {
+      snapshot_id: latestHoldSnapshot.id,
+      hold_id: holdId,
+      correlation_id: correlationId,
+    });
+  }
+
+  const targetState = latestHoldSnapshot.hold_state;
+  if (!HOLD_STATE_TO_TARGET.includes(targetState)) {
+    throw new HttpError(
+      409,
+      "HOLD_SNAPSHOT_MISSING",
+      "Hold snapshot has an unsupported target state",
+      {
+        snapshot_id: latestHoldSnapshot.id,
+        hold_id: holdId,
+        target_state: targetState,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = $2,
+        scheduled_start = $3,
+        scheduled_end = $4,
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId, targetState, latestHoldSnapshot.scheduled_start, latestHoldSnapshot.scheduled_end],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: targetState,
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/schedule/rollback",
+      requested_at: nowIso(),
+      request: body,
+      hold_snapshot_id: latestHoldSnapshot.id,
+      hold_sequence_id: holdId,
+      reason,
+      confirmation_window: confirmationWindow,
+      restored_state: targetState,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(ticket),
+      hold_id: holdId,
+      snapshot_id: latestHoldSnapshot.id,
+      reason,
+      restored_state: targetState,
+      restored_window: {
+        start: latestHoldSnapshot.scheduled_start
+          ? new Date(latestHoldSnapshot.scheduled_start).toISOString()
+          : null,
+        end: latestHoldSnapshot.scheduled_end
+          ? new Date(latestHoldSnapshot.scheduled_end).toISOString()
+          : null,
+      },
+    },
   };
 }
 
@@ -3697,6 +4831,50 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  const recommendMatch = pathname.match(/^\/tickets\/([^/]+)\/assignment\/recommend$/);
+  if (method === "POST" && recommendMatch && ticketRouteRegex.test(recommendMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/assignment/recommend",
+      handler: assignmentRecommendMutation,
+      ticketId: recommendMatch[1],
+    };
+  }
+
+  const scheduleHoldMatch = pathname.match(/^\/tickets\/([^/]+)\/schedule\/hold$/);
+  if (method === "POST" && scheduleHoldMatch && ticketRouteRegex.test(scheduleHoldMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/schedule/hold",
+      handler: holdScheduleMutation,
+      ticketId: scheduleHoldMatch[1],
+    };
+  }
+
+  const scheduleReleaseMatch = pathname.match(/^\/tickets\/([^/]+)\/schedule\/release$/);
+  if (method === "POST" && scheduleReleaseMatch && ticketRouteRegex.test(scheduleReleaseMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/schedule/release",
+      handler: releaseScheduleMutation,
+      ticketId: scheduleReleaseMatch[1],
+    };
+  }
+
+  const scheduleRollbackMatch = pathname.match(/^\/tickets\/([^/]+)\/schedule\/rollback$/);
+  if (
+    method === "POST" &&
+    scheduleRollbackMatch &&
+    ticketRouteRegex.test(scheduleRollbackMatch[1])
+  ) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/schedule/rollback",
+      handler: rollbackScheduleMutation,
+      ticketId: scheduleRollbackMatch[1],
+    };
+  }
+
   const techCheckInMatch = pathname.match(/^\/tickets\/([^/]+)\/tech\/check-in$/);
   if (method === "POST" && techCheckInMatch && ticketRouteRegex.test(techCheckInMatch[1])) {
     return {
@@ -4140,6 +5318,9 @@ export function createDispatchApiServer(options = {}) {
             }),
         requestId,
       );
+      if (correlationId && body?.error && !body.error.correlation_id) {
+        body.error.correlation_id = correlationId;
+      }
       attachPolicyErrorContext(body.error);
       sendJson(response, status, body);
       const endpoint = route?.endpoint ?? "UNMATCHED";

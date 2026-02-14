@@ -42,8 +42,8 @@ test("includes fail-closed state transition constraint matrix", () => {
     "NULL-origin transitions for blind intake bootstraps missing",
   );
   expectSql(
-    /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
-    "TRIAGED transitions do not include emergency dispatch path",
+    /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE'\)/,
+    "TRIAGED transitions should not include direct DISPATCHED path",
   );
   expectSql(
     /from_state = 'APPROVAL_REQUIRED'[\s\S]*to_state IN \('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS'\)/,

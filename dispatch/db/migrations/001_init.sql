@@ -18,6 +18,7 @@ BEGIN
       'READY_TO_SCHEDULE',
       'SCHEDULE_PROPOSED',
       'SCHEDULED',
+      'PENDING_CUSTOMER_CONFIRMATION',
       'DISPATCHED',
       'ON_SITE',
       'IN_PROGRESS',
@@ -176,7 +177,7 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (
       from_state = 'TRIAGED'
-      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
     )
     OR (
       from_state = 'APPROVAL_REQUIRED'
@@ -185,6 +186,14 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
     OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'SCHEDULE_PROPOSED')
     OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'SCHEDULED')
     OR (from_state = 'SCHEDULED' AND to_state = 'DISPATCHED')
+    OR (
+      from_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
+      AND to_state = 'PENDING_CUSTOMER_CONFIRMATION'
+    )
+    OR (
+      from_state = 'PENDING_CUSTOMER_CONFIRMATION'
+      AND to_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
+    )
     OR (from_state = 'DISPATCHED' AND to_state = 'ON_SITE')
     OR (from_state = 'ON_SITE' AND to_state = 'IN_PROGRESS')
     OR (
@@ -200,6 +209,46 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
 
 CREATE INDEX IF NOT EXISTS idx_transitions_ticket_created ON ticket_state_transitions(ticket_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_transitions_from_to ON ticket_state_transitions(from_state, to_state);
+
+CREATE TABLE IF NOT EXISTS assignment_recommendation_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  recommendation_snapshot_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  ticket_state text,
+  requested_by text NOT NULL CHECK (length(trim(requested_by)) > 0),
+  request_id uuid NOT NULL,
+  correlation_id text,
+  trace_id text,
+  recommendation_limit int NOT NULL CHECK (recommendation_limit > 0),
+  incident_type text,
+  site_region text,
+  candidates jsonb NOT NULL DEFAULT '[]'::jsonb,
+  recommended_tech_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_assignment_recommendation_snapshots_idempotent UNIQUE (ticket_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assignment_recommendation_snapshots_ticket
+  ON assignment_recommendation_snapshots(ticket_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS schedule_hold_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  hold_sequence_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  requested_by text NOT NULL CHECK (length(trim(requested_by)) > 0),
+  request_id uuid NOT NULL,
+  correlation_id text,
+  hold_reason_code text NOT NULL CHECK (length(trim(hold_reason_code)) > 0),
+  hold_state text NOT NULL CHECK (hold_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')),
+  scheduled_start timestamptz,
+  scheduled_end timestamptz,
+  hold_reason_notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_schedule_hold_snapshots_idempotent UNIQUE (ticket_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_hold_snapshots_ticket
+  ON schedule_hold_snapshots(ticket_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

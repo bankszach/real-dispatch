@@ -335,3 +335,250 @@ test("triage to READY_TO_SCHEDULE enforces blind-intake policy before scheduling
   const updatedState = psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`);
   assert.equal(updatedState, "TRIAGED");
 });
+
+test("triage from TRIAGED blind ticket to READY_TO_SCHEDULE succeeds when policy is met", async () => {
+  const intake = await post(
+    "/tickets/intake",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111121",
+      "X-Actor-Id": "dispatcher-blind-9",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.blind_intake",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      customer_name: "Ready Path",
+      contact_phone: "(555) 555-0141",
+      summary: "Window seal leak",
+      incident_type: "WINDOW_GLAZING",
+      description: "Needs scheduling after review.",
+      priority: "URGENT",
+      identity_confidence: 95,
+      classification_confidence: 96,
+      sop_handoff_acknowledged: false,
+    },
+  );
+
+  assert.equal(intake.status, 201);
+  assert.equal(intake.body.state, "TRIAGED");
+  const ticketId = intake.body.id;
+  const triage = await post(
+    `/tickets/${ticketId}/triage`,
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111122",
+      "X-Actor-Id": "dispatcher-blind-9",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.triage",
+    },
+    {
+      priority: "URGENT",
+      incident_type: "WINDOW_GLAZING",
+      workflow_outcome: "READY_TO_SCHEDULE",
+      sop_handoff_acknowledged: true,
+    },
+  );
+
+  assert.equal(triage.status, 200);
+  assert.equal(triage.body.state, "READY_TO_SCHEDULE");
+});
+
+test("triage from TRIAGED blind ticket to READY_TO_SCHEDULE fails on low classification confidence", async () => {
+  const intake = await post(
+    "/tickets/intake",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111123",
+      "X-Actor-Id": "dispatcher-blind-10",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.blind_intake",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      customer_name: "Low Class",
+      contact_phone: "(555) 555-0142",
+      summary: "Door alignment issue",
+      incident_type: "DOOR_PANEL_FAILURE",
+      description: "Needs follow-up but not schedulable.",
+      priority: "ROUTINE",
+      identity_confidence: 95,
+      classification_confidence: 30,
+      sop_handoff_acknowledged: true,
+    },
+  );
+
+  assert.equal(intake.status, 201);
+  assert.equal(intake.body.state, "TRIAGED");
+
+  const triage = await post(
+    `/tickets/${intake.body.id}/triage`,
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111124",
+      "X-Actor-Id": "dispatcher-blind-10",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.triage",
+    },
+    {
+      priority: "ROUTINE",
+      incident_type: "DOOR_PANEL_FAILURE",
+      workflow_outcome: "READY_TO_SCHEDULE",
+      sop_handoff_acknowledged: true,
+    },
+  );
+
+  assert.equal(triage.status, 409);
+  assert.equal(triage.body.error.code, "LOW_CLASSIFICATION_CONFIDENCE");
+});
+
+test("triage from TRIAGED blind ticket includes SOP handoff prompt when SOP check blocks scheduling", async () => {
+  const intake = await post(
+    "/tickets/intake",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111125",
+      "X-Actor-Id": "dispatcher-blind-11",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.blind_intake",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      customer_name: "Ops Handoff",
+      contact_phone: "(555) 555-0143",
+      summary: "Door handle stiff",
+      incident_type: "DOOR_HANDLE_ISSUE",
+      description: "Needs dispatcher follow-up.",
+      priority: "URGENT",
+      identity_confidence: 95,
+      classification_confidence: 95,
+      sop_handoff_acknowledged: false,
+    },
+  );
+
+  assert.equal(intake.status, 201);
+  assert.equal(intake.body.state, "TRIAGED");
+  assert.equal(intake.body.sop_handoff_required, true);
+
+  const triage = await post(
+    `/tickets/${intake.body.id}/triage`,
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111126",
+      "X-Actor-Id": "dispatcher-blind-11",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.triage",
+      "X-Correlation-Id": "corr-story-glz03-sop",
+    },
+    {
+      priority: "URGENT",
+      incident_type: "DOOR_HANDLE_ISSUE",
+      workflow_outcome: "READY_TO_SCHEDULE",
+      sop_handoff_acknowledged: false,
+    },
+  );
+
+  assert.equal(triage.status, 409);
+  assert.equal(triage.body.error.code, "SOP_HANDOFF_REQUIRED");
+  assert.equal(typeof triage.body.error.sop_handoff_prompt, "string");
+  assert.equal(triage.body.error.sop_handoff_prompt.includes("SOP"), true);
+  assert.equal(triage.body.error.correlation_id, "corr-story-glz03-sop");
+});
+
+test("blind intake dedupe is canonical across formatting normalization", async () => {
+  const first = await post(
+    "/tickets/intake",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111117",
+      "X-Actor-Id": "dispatcher-blind-6",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.blind_intake",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      customer_name: "Casey Normalize",
+      contact_phone: "(555) 010-1212",
+      summary: "Glass track has noise",
+      incident_type: "GLAZING_MAINTENANCE",
+      description: "Raw formatting variant A.",
+      priority: "ROUTINE",
+      identity_confidence: 93,
+      classification_confidence: 94,
+      sop_handoff_acknowledged: true,
+    },
+  );
+
+  assert.equal(first.status, 201);
+
+  const duplicate = await post(
+    "/tickets/intake",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111118",
+      "X-Actor-Id": "dispatcher-blind-7",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.blind_intake",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      customer_name: "  CASEY NORMALIZE ",
+      contact_phone: "555-010-1212",
+      summary: "  glass track has noise  ",
+      incident_type: "glazing_maintenance",
+      description: "Raw formatting variant B.",
+      priority: "ROUTINE",
+      identity_confidence: 93,
+      classification_confidence: 94,
+      sop_handoff_acknowledged: true,
+    },
+  );
+
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error.code, "DUPLICATE_INTAKE");
+  assert.equal(duplicate.body.error.duplicate_ticket_id, first.body.id);
+
+  const signatureCount = Number(
+    psql(
+      `SELECT count(*) FROM tickets WHERE identity_signature = '${first.body.identity_signature}';`,
+    ),
+  );
+  assert.equal(signatureCount, 1);
+});
+
+test("non-blind triage remains able to set READY_TO_SCHEDULE", async () => {
+  const created = await post(
+    "/tickets",
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111119",
+      "X-Actor-Id": "dispatcher-blind-8",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.create",
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      summary: "Non-blind intake handoff test",
+      description: "Manual ticket should not be blocked by blind policy.",
+    },
+  );
+
+  assert.equal(created.status, 201);
+  assert.equal(created.body.identity_signature, null);
+
+  const triage = await post(
+    `/tickets/${created.body.id}/triage`,
+    {
+      "Idempotency-Key": "b1d7c6a0-0000-4000-8000-111111111120",
+      "X-Actor-Id": "dispatcher-blind-8",
+      "X-Actor-Role": "dispatcher",
+      "X-Tool-Name": "ticket.triage",
+    },
+    {
+      priority: "EMERGENCY",
+      incident_type: "DOOR_PANEL_FAILURE",
+      workflow_outcome: "READY_TO_SCHEDULE",
+      sop_handoff_acknowledged: false,
+    },
+  );
+
+  assert.equal(triage.status, 200);
+  assert.equal(triage.body.state, "READY_TO_SCHEDULE");
+});
