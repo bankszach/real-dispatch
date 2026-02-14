@@ -1,3 +1,33 @@
+## 2026-02-14 09:35 PST
+
+### Process checkpoint: launch reproducibility capture
+
+Summary:
+Captured and documented the exact steps required to recover the project to the current working checkpoint for MVP chat/control-plane verification.
+
+Changes:
+
+- Added `dispatch/ops/runbooks/mvp_launch_checkpoint.md` with a full startup, tool refresh, and smoke-test sequence.
+- Linked checkpoint runbook from `dispatch/ops/README.md`.
+- Linked checkpoint runbook from `dispatch/ops/runbooks/README.md`.
+
+Validation evidence:
+
+- `pnpm openclaw gateway restart`
+- `pnpm openclaw status --json` showing dispatch/default agent readiness.
+- `dispatcher_cockpit` command successful (HTTP 200).
+- `dispatch_contract_status` callable from chat.
+- `node --test --test-concurrency=1 dispatch/tests/*.mjs` passing at this checkpoint.
+
+Rationale:
+
+- Preserved non-obvious operational state so future operators can rehydrate chat-first access without rediscovering tool wiring and bootstrap sequencing.
+- Confirmed expected empty-cockpit baseline when no seeded tickets exist.
+
+Next:
+
+- Continue using this runbook for local recovery and keep `dispatch/ops/runbooks/mvp_launch_checkpoint.md` updated when tooling or startup order changes.
+
 ## 2026-02-13 16:10 PST
 
 ### STORY-03
