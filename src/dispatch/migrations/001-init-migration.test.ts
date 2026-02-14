@@ -1,0 +1,58 @@
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const migrationPath = path.resolve(process.cwd(), "dispatch/db/migrations/001_init.sql");
+const migrationSql = fs.readFileSync(migrationPath, "utf8");
+
+function expectSql(pattern: RegExp, message: string) {
+  expect(migrationSql, message).toMatch(pattern);
+}
+
+describe("dispatch db migration 001_init", () => {
+  it("creates required core tables", () => {
+    expectSql(/CREATE TABLE IF NOT EXISTS tickets \(/, "tickets table missing");
+    expectSql(/CREATE TABLE IF NOT EXISTS audit_events \(/, "audit_events table missing");
+    expectSql(/CREATE TABLE IF NOT EXISTS ticket_state_transitions \(/, "ticket_state_transitions table missing");
+    expectSql(/CREATE TABLE IF NOT EXISTS idempotency_keys \(/, "idempotency_keys table missing");
+    expectSql(/CREATE TABLE IF NOT EXISTS evidence_items \(/, "evidence_items table missing");
+  });
+
+  it("enforces idempotency uniqueness by actor endpoint request", () => {
+    expectSql(
+      /UNIQUE\(actor_id, endpoint, request_id\)/,
+      "idempotency uniqueness constraint is missing",
+    );
+  });
+
+  it("includes fail-closed state transition constraint matrix", () => {
+    expectSql(
+      /CONSTRAINT chk_ticket_state_transition_valid CHECK \(/,
+      "state transition constraint missing",
+    );
+    expectSql(
+      /from_state = 'NEW' AND to_state IN \('NEEDS_INFO', 'TRIAGED'\)/,
+      "NEW transitions not constrained",
+    );
+    expectSql(
+      /from_state = 'TRIAGED'[\\s\\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
+      "TRIAGED transitions do not include emergency dispatch path",
+    );
+    expectSql(
+      /from_state = 'IN_PROGRESS' AND to_state IN \('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION'\)/,
+      "IN_PROGRESS transitions not constrained",
+    );
+    expectSql(/from_state = 'INVOICED' AND to_state = 'CLOSED'/, "terminal transition missing");
+  });
+
+  it("creates queue-oriented ticket indexes", () => {
+    expectSql(
+      /CREATE INDEX IF NOT EXISTS idx_tickets_state_priority_created ON tickets\(state, priority, created_at\);/,
+      "state-priority queue index missing",
+    );
+    expectSql(
+      /CREATE INDEX IF NOT EXISTS idx_tickets_state_schedule ON tickets\(state, scheduled_start\);/,
+      "state-schedule index missing",
+    );
+  });
+});
