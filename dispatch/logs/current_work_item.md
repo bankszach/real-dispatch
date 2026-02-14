@@ -1,7 +1,7 @@
 # Current Work Item
 
 ## Story ID
-`STORY-06: Incident templates + evidence requirement policy model`
+`STORY-07: Evidence API + object-store reference integration`
 
 ## Epic
 `EPIC-04: Evidence + Incident Templates`
@@ -10,12 +10,12 @@
 `P0`
 
 ## Acceptance Criteria (from backlog)
-- Incident/evidence template policy model is implemented.
-- Required evidence gates are representable per incident type.
-- Completion-readiness checks can consume template requirements deterministically.
+- Evidence references are stored and retrievable for ticket closeout artifacts.
+- Evidence APIs/object-store reference workflow is integrated for completion paths.
+- Closeout enforcement can consume persisted evidence references against template requirements.
 
 ## Why This Was Selected
-`STORY-05` is now complete and closes the role/tool/state authorization hardening gap. The next dependency-valid P0 item is evidence-template enforcement modeling, which is required before implementing strict closeout evidence gates and canonical policy-violation E2E checks.
+`STORY-06` is now complete and provides deterministic incident template policy modeling. The next dependency-valid P0 item is evidence API/object-store integration so required evidence gates can be enforced against persisted evidence in real completion flows.
 
 ## Dependency Check
 - Schema/migrations: satisfied (`STORY-03` complete).
@@ -23,10 +23,11 @@
 - Timeline/audit completeness: satisfied (`STORY-02` complete).
 - Closed bridge mapping: satisfied (`STORY-04` complete).
 - Server-side role/tool/state auth hardening: satisfied (`STORY-05` complete).
-- Evidence template model before artifact enforcement: pending in this story.
+- Incident template model: satisfied (`STORY-06` complete).
+- Evidence persistence/integration before canonical E2E violation tests: pending in this story.
 
 ## Deterministic Scope for Next Cycle
-- Define incident template schema with required evidence/checklist gates.
-- Add persistence/read APIs or configuration loaders for template lookup.
-- Add fail-closed validator for missing required closeout evidence against selected template.
-- Add node-native tests for template selection and missing-evidence rejection decisions.
+- Implement evidence ingest/list/read surfaces tied to `evidence_items` references.
+- Define deterministic evidence key mapping from persisted items to template-required keys.
+- Wire closeout gating checks to persisted evidence references.
+- Add node-native integration tests for missing-evidence fail-closed behavior on completion paths.

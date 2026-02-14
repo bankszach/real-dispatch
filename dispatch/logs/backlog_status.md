@@ -7,8 +7,8 @@
 | STORY-03 | EPIC-02: Postgres Schema + Migrations | P0 | COMPLETE | Implemented in `dispatch/db/migrations/001_init.sql`; validated on clean Postgres DB with fail-closed checks. |
 | STORY-04 | EPIC-03: Closed Toolset + Integration | P0 | COMPLETE | Implemented closed tool bridge with allowlisted tool-to-endpoint mappings, deny-by-default unknown-tool rejection, per-role bridge gating, and request/correlation propagation validation via node-native integration tests. |
 | STORY-05 | EPIC-03: Closed Toolset + Integration | P0 | COMPLETE | Added authoritative server-side role/tool/state authorization hardening, enforced endpoint tool-name checks (`TOOL_NOT_ALLOWED`), centralized state-context policy checks, and synchronized bridge/API policies via shared module with node-native coverage. |
-| STORY-06 | EPIC-04: Evidence + Incident Templates | P0 | PENDING | Evidence template policy model not yet implemented. |
-| STORY-07 | EPIC-04: Evidence + Incident Templates | P0 | PENDING | Evidence API/object-store integration not yet implemented. |
+| STORY-06 | EPIC-04: Evidence + Incident Templates | P0 | COMPLETE | Implemented versioned incident template policy model with deterministic loader/parser and fail-closed closeout readiness evaluation for required evidence/checklist gates. |
+| STORY-07 | EPIC-04: Evidence + Incident Templates | P0 | PENDING | Template model now exists; next step is evidence API/object-store references and enforcement integration in completion flows. |
 | STORY-08 | EPIC-05: E2E Proof | P0 | PENDING | Depends on endpoint/tool/audit/evidence enforcement chain. |
 | STORY-09 | EPIC-06: Observability | P1 | PENDING | Not in P0 spine. |
 | STORY-10 | EPIC-07: UX (v0 minimal) | P1 | PENDING | Not in P0 spine. |

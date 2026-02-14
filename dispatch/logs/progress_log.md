@@ -375,3 +375,69 @@ Validation Commands + Results:
 
 Notes:
 - Parallel execution of docker-backed story tests can transiently conflict on container lifecycle; authoritative regression status above is based on clean passing runs.
+
+## 2026-02-13 20:04 PST
+
+### STORY-06
+Summary:
+Started STORY-06 implementation for incident template policy modeling and deterministic closeout evidence/checklist readiness evaluation.
+
+Plan:
+- Add versioned incident/evidence template data file for top incident types.
+- Implement deterministic template parser/loader and fail-closed validation rules.
+- Implement closeout readiness evaluator returning explicit missing evidence/checklist gates.
+- Add node-native tests for template lookup, missing-evidence rejection, and fail-closed parser behavior.
+
+Planned File Changes:
+- `dispatch/policy/incident_type_templates.v1.json`
+- `dispatch/workflow-engine/rules/closeout-required-evidence.mjs`
+- `dispatch/tests/story_06_incident_templates.node.test.mjs`
+- `dispatch/logs/story_06_contract.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+## 2026-02-13 20:04 PST
+
+### STORY-06
+Summary:
+Implemented incident template policy model with versioned templates, fail-closed parser/loader, and deterministic closeout readiness evaluation.
+
+Files Modified:
+- `dispatch/policy/incident_type_templates.v1.json`
+- `dispatch/workflow-engine/rules/closeout-required-evidence.mjs`
+- `dispatch/tests/story_06_incident_templates.node.test.mjs`
+- `dispatch/workflow-engine/rules/README.md`
+- `dispatch/policy/README.md`
+- `dispatch/logs/story_06_contract.md`
+- `dispatch/logs/progress_log.md`
+- `dispatch/logs/backlog_status.md`
+- `dispatch/logs/current_work_item.md`
+- `dispatch/logs/next_story_recommendation.md`
+
+Behavior Delivered:
+- Added six incident templates with required evidence/checklist gates in versioned policy data.
+- Added deterministic loader/parser with duplicate and schema validation fail-closed checks.
+- Added closeout readiness evaluator returning deterministic status codes and sorted missing requirement lists.
+- Added incident template lookup helper with normalized incident type matching.
+
+Tests Added:
+- `dispatch/tests/story_06_incident_templates.node.test.mjs`
+  - deterministic default load + normalized lookup
+  - unknown incident fail-closed (`TEMPLATE_NOT_FOUND`)
+  - missing evidence (`MISSING_EVIDENCE`)
+  - missing checklist (`MISSING_CHECKLIST`)
+  - combined missing requirements (`MISSING_REQUIREMENTS`)
+  - successful readiness (`READY`)
+  - invalid template set parser/loader rejection
+
+Validation Commands + Results:
+- `node --test dispatch/tests/story_06_incident_templates.node.test.mjs` -> PASS (7/7)
+- `node --test dispatch/tests/story_05_authorization.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/story_04_tool_bridge.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/story_02_timeline.node.test.mjs` -> PASS (3/3)
+- `node --test dispatch/tests/story_01_idempotency.node.test.mjs` -> PASS (4/4)
+- `node --test dispatch/tests/001_init_migration.node.test.mjs` -> PASS (4/4)
+
+Caveats / Risks:
+- Template data is file-backed in this story (JSON) rather than database-backed; STORY-07 can extend to API/object-store integration and runtime mutation controls if required.

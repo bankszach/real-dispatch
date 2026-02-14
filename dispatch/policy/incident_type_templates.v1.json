@@ -1,0 +1,107 @@
+{
+  "schema_version": "2026-02-13",
+  "templates": [
+    {
+      "incident_type": "DOOR_WONT_LATCH",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_door_edge_and_strike",
+        "photo_after_latched_alignment",
+        "note_adjustments_and_test_cycles",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    },
+    {
+      "incident_type": "CLOSER_LEAKING_OR_SLAMMING",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_closer_body",
+        "photo_after_closer_or_adjustment",
+        "note_sweep_and_latch_speed_settings",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    },
+    {
+      "incident_type": "AUTO_OPERATOR_FAULT",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_operator_and_sensors",
+        "photo_after_operator_and_sensors",
+        "note_cycle_and_sensor_tests",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    },
+    {
+      "incident_type": "CANNOT_SECURE_ENTRY",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_security_risk",
+        "photo_after_temporary_or_permanent_securement",
+        "note_risk_mitigation_and_customer_handoff",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    },
+    {
+      "incident_type": "HARDWARE_REPLACEMENT",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_failed_hardware",
+        "photo_after_installed_hardware",
+        "note_part_numbers_and_function_test",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    },
+    {
+      "incident_type": "FRAME_OR_GLASS_DAMAGE",
+      "version": "1.0.0",
+      "required_evidence_keys": [
+        "photo_before_damage_extent",
+        "photo_after_repair_or_board_up",
+        "note_safety_actions_and_follow_up_scope",
+        "signature_or_no_signature_reason"
+      ],
+      "required_checklist_keys": [
+        "work_performed",
+        "parts_used_or_needed",
+        "resolution_status",
+        "onsite_photos_after",
+        "billing_authorization"
+      ]
+    }
+  ]
+}
