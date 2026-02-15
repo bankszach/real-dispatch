@@ -53,6 +53,7 @@ export default function register(api: {
     "tech.request_change": "Submit technician change request via dispatch-api.",
     "approval.decide": "Approve or deny a change request via dispatch-api.",
     "closeout.add_evidence": "Attach closeout evidence via dispatch-api.",
+    "closeout.candidate": "Run candidate closeout automation via dispatch-api.",
     "qa.verify": "Verify closeout package via dispatch-api.",
     "billing.generate_invoice": "Generate invoice state transition via dispatch-api.",
     "ticket.get": "Read ticket snapshot via dispatch-api.",

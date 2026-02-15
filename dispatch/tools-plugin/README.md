@@ -20,6 +20,7 @@ This plugin is the control-plane bridge. It should expose only the closed dispat
 - `tech.request_change` -> `POST /tickets/{ticketId}/tech/request-change`
 - `approval.decide` -> `POST /tickets/{ticketId}/approval/decide`
 - `closeout.add_evidence` -> `POST /tickets/{ticketId}/evidence`
+- `closeout.candidate` -> `POST /tickets/{ticketId}/closeout/candidate`
 - `tech.complete` -> `POST /tickets/{ticketId}/tech/complete`
 - `qa.verify` -> `POST /tickets/{ticketId}/qa/verify`
 - `billing.generate_invoice` -> `POST /tickets/{ticketId}/billing/generate-invoice`

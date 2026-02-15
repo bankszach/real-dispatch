@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS tickets (
   )
 );
 
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS identity_signature text;
+
 CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
 CREATE INDEX IF NOT EXISTS idx_tickets_site ON tickets(site_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id);

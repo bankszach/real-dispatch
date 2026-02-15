@@ -10,12 +10,12 @@ This document preserves the recovery path to reach the validated state where:
 
 ```bash
 cp .env.example .env
-echo "DISPATCH_BOOTSTRAP_EVIDENCE_PATH=/tmp/dispatch-bootstrap-evidence.json" >> .env
+export DISPATCH_BOOTSTRAP_EVIDENCE_PATH=/tmp/dispatch-bootstrap-evidence.json
 pnpm install   # when dependency drift is expected
 pnpm dispatch:stack:down   # optional hard reset
 pnpm dispatch:stack:up
 pnpm dispatch:stack:status
-pnpm dispatch:bootstrap
+DISPATCH_DATABASE_URL=postgres://dispatch:dispatch@127.0.0.1:5432/dispatch DISPATCH_BOOTSTRAP_EVIDENCE_PATH=/tmp/dispatch-bootstrap-evidence.json pnpm dispatch:bootstrap
 ```
 
 If services are already up, use `pnpm dispatch:stack:up` directly after confirming status.
@@ -48,11 +48,16 @@ Run these exact commands in the chat window, in order:
 2. `dispatcher_cockpit`  
    (canonical API alias is `dispatcher.cockpit`; both are expected to route in current checkpoint)
 
-`dispatch_contract_status` output should include the bootstrap fixture IDs used by this run.
+`dispatch_contract_status` output should confirm contract registration; use bootstrap evidence file for fixture IDs and counts.
 
 Expected response:
 
 - `dispatcher_cockpit` returns HTTP 200 with an empty queue when no test tickets exist yet.
+
+Worker health check (new):
+
+- `pnpm dispatch:stack:logs -f dispatch-worker` should emit periodic `worker.heartbeat` entries with queue counts and cycle metrics.
+- On stop (`SIGINT`/`SIGTERM`), worker logs should show `worker.shutdown_requested` then `worker.shutdown_complete` before exit.
 
 ## 5) Exercise one lifecycle path from chat
 
@@ -114,7 +119,7 @@ Bootstrap evidence packet:
 
 Negative-path check:
 
-- Run `pnpm dispatch:bootstrap` with `DISPATCH_BOOTSTRAP_SKIP_API_READY_CHECK=false` while API is intentionally unavailable.
+- Run `DISPATCH_DATABASE_URL=postgres://dispatch:dispatch@127.0.0.1:5432/dispatch DISPATCH_BOOTSTRAP_SKIP_API_READY_CHECK=false pnpm dispatch:bootstrap` while API is intentionally unavailable.
 - Confirm bootstrap exits non-zero with explicit readiness-failure text before resuming normal work.
 
 ## Notes (known state)

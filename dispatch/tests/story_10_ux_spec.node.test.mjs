@@ -43,11 +43,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -412,7 +408,11 @@ test("dispatcher cockpit spec includes SLA timers, assignment override, timeline
   const content = fs.readFileSync(dispatcherSpecPath, "utf8");
 
   mustInclude(content, /SLA Timer Rules/i, "dispatcher spec must define SLA timer behavior");
-  mustInclude(content, /Assignment Override Flow/i, "dispatcher spec must define assignment override");
+  mustInclude(
+    content,
+    /Assignment Override Flow/i,
+    "dispatcher spec must define assignment override",
+  );
   mustInclude(content, /Timeline Panel/i, "dispatcher spec must define timeline view");
   mustInclude(content, /Wireframe \(ASCII\)/i, "dispatcher spec must include wireframe");
 
@@ -424,9 +424,17 @@ test("technician job packet spec includes required packet fields and closeout ev
   const content = fs.readFileSync(techPacketSpecPath, "utf8");
 
   mustInclude(content, /Packet Structure/i, "tech packet spec must define packet structure");
-  mustInclude(content, /Evidence Checklist Mapping/i, "tech packet spec must define evidence mapping");
+  mustInclude(
+    content,
+    /Evidence Checklist Mapping/i,
+    "tech packet spec must define evidence mapping",
+  );
   mustInclude(content, /Signature Requirement/i, "tech packet spec must define signature handling");
-  mustInclude(content, /Closeout Gate Behavior/i, "tech packet spec must define closeout gate behavior");
+  mustInclude(
+    content,
+    /Closeout Gate Behavior/i,
+    "tech packet spec must define closeout gate behavior",
+  );
   mustInclude(content, /Mobile Wireframe \(ASCII\)/i, "tech packet spec must include wireframe");
 
   mustInclude(content, /no_signature_reason/i, "tech packet must require no-signature reason path");
@@ -462,7 +470,9 @@ test("dispatcher cockpit response maps actions to closed dispatch endpoints and 
     assertActionMapsToPolicy(action, ticketId);
   }
 
-  const scheduleProposeAction = row.actions.find((action) => action.action_id === "schedule_propose");
+  const scheduleProposeAction = row.actions.find(
+    (action) => action.action_id === "schedule_propose",
+  );
   assert.ok(scheduleProposeAction);
   assert.equal(scheduleProposeAction.enabled, false);
   assert.equal(scheduleProposeAction.policy_error.code, "INVALID_STATE_TRANSITION");
@@ -535,13 +545,17 @@ test("technician packet uses API truth for timeline/evidence/closeout gate and s
   assert.equal(Array.isArray(packet.body.packet.evidence_requirements.evidence_items), true);
   assert.ok(packet.body.packet.evidence_requirements.evidence_items.length >= 1);
 
-  const requiredEvidenceKeys = packet.body.packet.evidence_requirements.required_evidence.map((entry) => entry.key);
+  const requiredEvidenceKeys = packet.body.packet.evidence_requirements.required_evidence.map(
+    (entry) => entry.key,
+  );
   assert.ok(requiredEvidenceKeys.includes("signature_or_no_signature_reason"));
 
   assert.equal(packet.body.packet.closeout_gate.ready, false);
   assert.equal(packet.body.packet.closeout_gate.code, "MISSING_SIGNATURE_CONFIRMATION");
 
-  const completeWorkAction = packet.body.packet.actions.find((action) => action.action_id === "complete_work");
+  const completeWorkAction = packet.body.packet.actions.find(
+    (action) => action.action_id === "complete_work",
+  );
   assert.ok(completeWorkAction);
   assertActionMapsToPolicy(completeWorkAction, ticketId);
   assert.equal(completeWorkAction.enabled, false);
@@ -549,7 +563,19 @@ test("technician packet uses API truth for timeline/evidence/closeout gate and s
   assert.equal(completeWorkAction.policy_error.dimension, "evidence");
   assert.equal(completeWorkAction.policy_error.requirement_code, "MISSING_SIGNATURE_CONFIRMATION");
 
-  const requestChangeAction = packet.body.packet.actions.find((action) => action.action_id === "request_change");
+  const candidateAction = packet.body.packet.actions.find(
+    (action) => action.action_id === "candidate",
+  );
+  assert.ok(candidateAction);
+  assertActionMapsToPolicy(candidateAction, ticketId);
+  assert.equal(candidateAction.enabled, false);
+  assert.equal(candidateAction.policy_error.code, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
+  assert.equal(candidateAction.policy_error.dimension, "evidence");
+  assert.equal(candidateAction.policy_error.requirement_code, "MISSING_SIGNATURE_CONFIRMATION");
+
+  const requestChangeAction = packet.body.packet.actions.find(
+    (action) => action.action_id === "request_change",
+  );
   assert.ok(requestChangeAction);
   assert.equal(requestChangeAction.enabled, true);
 });

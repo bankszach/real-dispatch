@@ -2,6 +2,7 @@ import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
+const DEFAULT_AGENT_IDENTITY_NAME = "dispatch";
 
 export function resolveAgentIdentity(
   cfg: OpenClawConfig,
@@ -23,16 +24,13 @@ export function resolveIdentityNamePrefix(
   cfg: OpenClawConfig,
   agentId: string,
 ): string | undefined {
-  const name = resolveAgentIdentity(cfg, agentId)?.name?.trim();
-  if (!name) {
-    return undefined;
-  }
+  const name = resolveAgentIdentity(cfg, agentId)?.name?.trim() || DEFAULT_AGENT_IDENTITY_NAME;
   return `[${name}]`;
 }
 
 /** Returns just the identity name (without brackets) for template context. */
 export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
+  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || DEFAULT_AGENT_IDENTITY_NAME;
 }
 
 export function resolveMessagePrefix(

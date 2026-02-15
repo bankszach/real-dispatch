@@ -139,6 +139,16 @@ const TOOL_POLICIES_RAW = {
     expected_to_state: null,
     allowed_from_states: null,
   },
+  "closeout.candidate": {
+    tool_name: "closeout.candidate",
+    method: "POST",
+    endpoint: "/tickets/{ticketId}/closeout/candidate",
+    mutating: true,
+    requires_ticket_id: true,
+    allowed_roles: ["dispatcher", "agent", "tech"],
+    expected_to_state: "COMPLETED_PENDING_VERIFICATION",
+    allowed_from_states: ["IN_PROGRESS"],
+  },
   "tech.complete": {
     tool_name: "tech.complete",
     method: "POST",

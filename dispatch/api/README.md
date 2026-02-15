@@ -29,6 +29,7 @@ node dispatch/api/src/server.mjs
 - `POST /tickets/{ticketId}/approval/decide`
 - `POST /tickets/{ticketId}/evidence`
 - `POST /tickets/{ticketId}/tech/complete`
+- `POST /tickets/{ticketId}/closeout/candidate`
 - `POST /tickets/{ticketId}/qa/verify`
 - `POST /tickets/{ticketId}/billing/generate-invoice`
 
@@ -82,6 +83,10 @@ UX read endpoints (`GET /ux/dispatcher/cockpit`, `GET /ux/technician/job-packet/
 - closeout hardening:
   - `tech.complete` requires signature evidence or explicit `no_signature_reason`
   - completion/verification reject non-object-store or unresolvable evidence references
+  - `closeout.candidate` runs closeout gate checks and risk heuristics:
+    - on low-risk evidence and complete checklist it moves the ticket to `COMPLETED_PENDING_VERIFICATION`
+    - on high-risk signal it returns `MANUAL_REVIEW_REQUIRED` with `requirement_code: "AUTOMATION_RISK_BLOCK"` and `risk_profile`
+    - failures include explicit structured audit/error payloads and are immutable
 - UX policy visibility:
   - fail-closed responses include structured `error.policy_error.dimension` classification
   - dispatcher cockpit and technician packet responses include action-level `policy_error` details for disabled flows

@@ -12,20 +12,19 @@ Backlog hygiene rules:
 
 Current active item:
 
-- `V0-BOOTSTRAP` (v0 readiness lock and deterministic environment launch contract).
-- Last completed work: `GLZ-03` (intake-to-schedulable guardrails and SOP handoff requirements).
+- `GLZ-09` (blind closeout candidate heuristics + manual escalation path).
+- Last completed work: `GLZ-11` (alerts, dashboard telemetry, and control-path readiness).
 
 Current planning cadence:
 
-- Active sprint focus: `Sprint V0-1`.
-- Active epic families: `EPIC-V0-COMPLETE` and `EPIC-GZ-01`.
+- Active sprint focus: `Sprint V0-3` (blocking pass into `V0-4`).
+- Active epic families: `EPIC-GZ-03`, `EPIC-GZ-04`, and `EPIC-V0-COMPLETE`.
 
 Engineering handoff readiness:
 
 - Handoff contract now lives in:
   - `ai_dispatch_agile_project_package/docs/12_Sprint_Plan.md`
   - `ai_dispatch_agile_project_package/docs/13_V0_Engineering_Readiness_Bundle.md`
-- Sprint V0-1 gate is required before opening dependent stories:
-  - `V0-BOOTSTRAP`
-  - `V0-WORKER-LAUNCH`
-  - `GLZ-01` through `GLZ-03`
+- Blocker priority now is:
+  - `GLZ-09` must pass before downstream `GLZ-10` and closeout billing chain can be considered production-ready.
+  - `GLZ-12` requires operator/override evidence controls and rollback proof before `V0-LAUNCH-GATE`.

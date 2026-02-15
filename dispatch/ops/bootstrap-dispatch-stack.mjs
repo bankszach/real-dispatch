@@ -206,6 +206,7 @@ const verifyDispatchApiReady = async () => {
 };
 
 try {
+  const readiness = await verifyDispatchApiReady();
   const client = await pool.connect();
 
   try {
@@ -262,7 +263,6 @@ try {
 
     await client.query("COMMIT");
 
-    const readiness = await verifyDispatchApiReady();
     const snapshot = await readFixtureState(client);
 
     const evidence = {

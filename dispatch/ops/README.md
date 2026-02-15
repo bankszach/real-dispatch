@@ -66,6 +66,7 @@ Bootstrap evidence:
 
 Worker note:
 
-- `dispatch-worker` currently runs a minimal placeholder process to keep the container active in demo environments until background jobs are implemented.
+- `dispatch-worker` now runs `dispatch/worker/dispatch-worker-placeholder.mjs` as a real background workflow process.
+- The worker executes scheduled-ticket assignment automation, writes structured heartbeat + failure logs, and supports safe shutdown on signal.
 
 See `dispatch/ops/runbooks/mvp_launch_checkpoint.md` for exact payload examples and expected outputs.

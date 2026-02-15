@@ -231,6 +231,7 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   SCHEDULE_HOLD_STATE_CONFLICT: "scheduling",
   HOLD_CONFIRMATION_MISSING: "scheduling",
   HOLD_SNAPSHOT_MISSING: "scheduling",
+  MANUAL_REVIEW_REQUIRED: "policy",
 });
 const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "schedule_propose", tool_name: "schedule.propose" }),
@@ -247,6 +248,7 @@ const TECH_PACKET_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "check_in", tool_name: "tech.check_in" }),
   Object.freeze({ action_id: "add_evidence", tool_name: "closeout.add_evidence" }),
   Object.freeze({ action_id: "request_change", tool_name: "tech.request_change" }),
+  Object.freeze({ action_id: "candidate", tool_name: "closeout.candidate" }),
   Object.freeze({ action_id: "complete_work", tool_name: "tech.complete" }),
   Object.freeze({ action_id: "open_timeline", tool_name: "ticket.timeline" }),
   Object.freeze({ action_id: "open_evidence", tool_name: "closeout.list_evidence" }),
@@ -257,6 +259,16 @@ const BLIND_INTAKE_DEFAULTS = Object.freeze({
   DUPLICATE_WINDOW_MINUTES: 120,
   SOP_HANDOFF_PROMPT: "Confirm onsite access and completion scope before scheduling.",
 });
+const CLOSEOUT_CANDIDATE_HIGH_RISK_INCIDENT_TYPES = Object.freeze([
+  "CANNOT_SECURE_ENTRY",
+  "FRAME_OR_GLASS_DAMAGE",
+  "AUTO_OPERATOR_FAULT",
+]);
+const CLOSEOUT_CANDIDATE_HIGH_RISK_EVIDENCE_KEYS = Object.freeze([
+  "photo_before_security_risk",
+  "note_risk_mitigation_and_customer_handoff",
+  "note_safety_actions_and_follow_up_scope",
+]);
 
 function normalizeOptionalFilePath(value) {
   if (typeof value !== "string") {
@@ -585,10 +597,9 @@ async function buildOperationalAlertsSnapshot(params) {
     pool,
     alertThresholds.stuck_scheduling_minutes,
   );
-  const completionRejectionCount = findErrorCounterCount(
-    metricsSnapshot,
-    "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
-  );
+  const completionRejectionCount =
+    findErrorCounterCount(metricsSnapshot, "CLOSEOUT_REQUIREMENTS_INCOMPLETE") +
+    findErrorCounterCount(metricsSnapshot, "MANUAL_REVIEW_REQUIRED");
   const idempotencyConflictCount = Number(metricsSnapshot.counters.idempotency_conflict_total ?? 0);
   const authPolicyFailureCount = sumAuthPolicyFailureCount(metricsSnapshot);
 
@@ -2099,7 +2110,9 @@ async function buildTechnicianJobPacketView(params) {
       actorRole: actor.actorRole,
       ticketState: ticketRow.state,
       ticketId: ticketRow.id,
-      extraPolicyError: blueprint.action_id === "complete_work" ? completeWorkPolicyError : null,
+      extraPolicyError: ["complete_work", "candidate"].includes(blueprint.action_id)
+        ? completeWorkPolicyError
+        : null,
     }),
   );
 
@@ -2646,6 +2659,55 @@ function resolveCloseoutValidationContext(params) {
   return {
     signature_satisfied: signatureEvidenceRows.length > 0 || noSignatureReason !== null,
     invalid_evidence_refs: invalidEvidenceRefsSorted,
+  };
+}
+
+function evaluateCloseoutCandidateRiskProfile(params) {
+  const incidentType =
+    typeof params.incident_type === "string" ? params.incident_type.trim().toUpperCase() : "";
+  const evidenceRows = Array.isArray(params.evidenceRows) ? params.evidenceRows : [];
+
+  const evidenceKeys = new Set();
+  for (const row of evidenceRows) {
+    const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+    if (evidenceKey) {
+      evidenceKeys.add(evidenceKey);
+    }
+  }
+
+  const reasons = [];
+  if (CLOSEOUT_CANDIDATE_HIGH_RISK_INCIDENT_TYPES.includes(incidentType)) {
+    reasons.push(`high-risk incident type: ${incidentType}`);
+  }
+
+  for (const evidenceKey of evidenceKeys) {
+    if (CLOSEOUT_CANDIDATE_HIGH_RISK_EVIDENCE_KEYS.includes(evidenceKey)) {
+      reasons.push(`high-risk evidence key: ${evidenceKey}`);
+    }
+  }
+
+  return {
+    level: reasons.length === 0 ? "low" : "high",
+    reasons,
+    evidence_keys: [...evidenceKeys].toSorted(),
+    evidence_items: evidenceRows.length,
+    incident_type: incidentType,
+  };
+}
+
+function buildCloseoutCandidateEvidenceScope(evidenceRows, explicitEvidenceRefs) {
+  const evidenceKeys = new Set();
+  for (const row of evidenceRows) {
+    const key = readEvidenceKeyFromMetadata(row.metadata);
+    if (key) {
+      evidenceKeys.add(key);
+    }
+  }
+
+  return {
+    evidence_items: evidenceRows.length,
+    evidence_keys: [...evidenceKeys].toSorted(),
+    evidence_refs: Array.isArray(explicitEvidenceRefs) ? explicitEvidenceRefs : [],
   };
 }
 
@@ -4707,6 +4769,202 @@ async function techCompleteMutation(client, context) {
   };
 }
 
+async function closeoutCandidateMutation(client, context) {
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    objectStoreSchemes,
+  } = context;
+  ensureObject(body);
+  ensureObjectField(body.checklist_status, "checklist_status");
+  const noSignatureReason = normalizeOptionalString(
+    body.no_signature_reason,
+    "no_signature_reason",
+  );
+  const explicitEvidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/closeout/candidate", existing.state, body);
+
+  if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "TEMPLATE_NOT_FOUND",
+        incident_type: null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+      },
+    );
+  }
+
+  const evidenceResult = await client.query(
+    `
+      SELECT id, kind, uri, metadata
+      FROM evidence_items
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+
+  const evidenceValidation = resolveCloseoutValidationContext({
+    incidentType: existing.incident_type.trim(),
+    noSignatureReason,
+    explicitEvidenceRefs,
+    evidenceRows: evidenceResult.rows,
+    objectStoreSchemes,
+  });
+
+  if (evidenceValidation.invalid_evidence_refs.length > 0) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "INVALID_EVIDENCE_REFERENCE",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
+      },
+    );
+  }
+
+  const evidenceKeys = [];
+  for (const row of evidenceResult.rows) {
+    const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+    if (evidenceKey) {
+      evidenceKeys.push(evidenceKey);
+    }
+  }
+  if (
+    evidenceValidation.signature_satisfied &&
+    !evidenceKeys.includes("signature_or_no_signature_reason")
+  ) {
+    evidenceKeys.push("signature_or_no_signature_reason");
+  }
+
+  let closeoutEvaluation;
+  try {
+    closeoutEvaluation = evaluateCloseoutRequirements({
+      incident_type: existing.incident_type.trim(),
+      evidence_items: evidenceKeys,
+      checklist_status: body.checklist_status,
+    });
+  } catch (error) {
+    if (error instanceof IncidentTemplatePolicyError) {
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Closeout requirements are incomplete",
+        {
+          requirement_code: "TEMPLATE_NOT_FOUND",
+          incident_type: existing.incident_type.trim().toUpperCase(),
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (!closeoutEvaluation.ready) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: closeoutEvaluation.code,
+        incident_type: closeoutEvaluation.incident_type,
+        template_version: closeoutEvaluation.template_version,
+        missing_evidence_keys: closeoutEvaluation.missing_evidence_keys,
+        missing_checklist_keys: closeoutEvaluation.missing_checklist_keys,
+      },
+    );
+  }
+
+  const riskProfile = evaluateCloseoutCandidateRiskProfile({
+    incident_type: existing.incident_type,
+    evidenceRows: evidenceResult.rows,
+  });
+
+  if (riskProfile.level === "high") {
+    throw new HttpError(
+      409,
+      "MANUAL_REVIEW_REQUIRED",
+      "Closeout candidate requires manual approval due to risk score",
+      {
+        requirement_code: "AUTOMATION_RISK_BLOCK",
+        incident_type: closeoutEvaluation.incident_type,
+        template_version: closeoutEvaluation.template_version,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: [],
+        risk_profile: riskProfile,
+      },
+    );
+  }
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'COMPLETED_PENDING_VERIFICATION',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition(client, {
+    ticketId,
+    beforeState: existing.state,
+    afterState: "COMPLETED_PENDING_VERIFICATION",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/closeout/candidate",
+      requested_at: nowIso(),
+      request: body,
+      closeout_check: closeoutEvaluation,
+      risk_profile: riskProfile,
+      evidence_scope: buildCloseoutCandidateEvidenceScope(
+        evidenceResult.rows,
+        explicitEvidenceRefs,
+      ),
+      no_signature_reason: noSignatureReason,
+      evidence_refs: explicitEvidenceRefs,
+      persisted_evidence_count: evidenceResult.rowCount,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
 function resolveRoute(method, pathname) {
   if (method === "GET" && pathname === "/health") {
     return {
@@ -4925,6 +5183,20 @@ function resolveRoute(method, pathname) {
       endpoint: "/tickets/{ticketId}/tech/complete",
       handler: techCompleteMutation,
       ticketId: techCompleteMatch[1],
+    };
+  }
+
+  const closeoutCandidateMatch = pathname.match(/^\/tickets\/([^/]+)\/closeout\/candidate$/);
+  if (
+    method === "POST" &&
+    closeoutCandidateMatch &&
+    ticketRouteRegex.test(closeoutCandidateMatch[1])
+  ) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/closeout/candidate",
+      handler: closeoutCandidateMutation,
+      ticketId: closeoutCandidateMatch[1],
     };
   }
 

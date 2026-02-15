@@ -10,7 +10,7 @@ const MAX_ASSISTANT_EMOJI = 16;
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
-  name: "Assistant",
+  name: "dispatch",
   avatar: "A",
 };
 
