@@ -30,6 +30,7 @@ Runbooks and drill assets:
 - `dispatch/ops/runbooks/mvp_06_on_call_drill.md`
 - `dispatch/ops/runbooks/mvp_08_pilot_cutover_readiness.md`
 - `dispatch/ops/runbooks/mvp_launch_checkpoint.md` (current launch checkpoint and recovery path)
+- `dispatch/ops/runbooks/v0_launch_gate_evidence_packet.md` (launch gate evidence packet for V0 pilot readiness)
 
 ## MVP launch checkpoint: restart to known-good state
 

@@ -32,6 +32,8 @@ node dispatch/api/src/server.mjs
 - `POST /tickets/{ticketId}/closeout/candidate`
 - `POST /tickets/{ticketId}/qa/verify`
 - `POST /tickets/{ticketId}/billing/generate-invoice`
+- `POST /ops/autonomy/pause`
+- `POST /ops/autonomy/rollback`
 
 ## Implemented read endpoints
 
@@ -42,6 +44,8 @@ node dispatch/api/src/server.mjs
 - `GET /ux/technician/job-packet/{ticketId}`
 - `GET /metrics`
 - `GET /ops/alerts`
+- `GET /ops/autonomy/state`
+- `GET /ops/autonomy/replay/{ticketId}`
 
 Each command endpoint requires:
 
@@ -87,6 +91,7 @@ UX read endpoints (`GET /ux/dispatcher/cockpit`, `GET /ux/technician/job-packet/
     - on low-risk evidence and complete checklist it moves the ticket to `COMPLETED_PENDING_VERIFICATION`
     - on high-risk signal it returns `MANUAL_REVIEW_REQUIRED` with `requirement_code: "AUTOMATION_RISK_BLOCK"` and `risk_profile`
     - failures include explicit structured audit/error payloads and are immutable
+  - `ops.autonomy.pause` and `ops.autonomy.rollback` persist control state/history and enforce `AUTONOMY_DISABLED` at closeout-related mutation points
 - UX policy visibility:
   - fail-closed responses include structured `error.policy_error.dimension` classification
   - dispatcher cockpit and technician packet responses include action-level `policy_error` details for disabled flows

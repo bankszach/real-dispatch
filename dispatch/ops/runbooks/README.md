@@ -17,8 +17,10 @@ Runbook index:
 - `completion_rejection.md`
 - `idempotency_conflict.md`
 - `auth_policy_failure.md`
+- `glz_12_autonomy_rollout_controls.md`
 - `blind_intake_guardrails.md`
 - `mvp_06_on_call_drill.md`
 - `mvp_08_pilot_cutover_readiness.md`
 - `mvp_launch_checkpoint.md` (recoverable startup/smoke-test snapshot)
 - `sprint_g2_scheduling_and_commitment.md`
+- `v0_launch_gate_evidence_packet.md` (pilot gate closure proof for V0 launch)

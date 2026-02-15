@@ -47,6 +47,7 @@ const RUNBOOK_PATHS = Object.freeze({
   COMPLETION_REJECTION_SPIKE: "dispatch/ops/runbooks/completion_rejection.md",
   IDEMPOTENCY_CONFLICT_SPIKE: "dispatch/ops/runbooks/idempotency_conflict.md",
   AUTH_POLICY_FAILURE_SPIKE: "dispatch/ops/runbooks/auth_policy_failure.md",
+  AUTONOMY_CONTROL_ROLLBACK: "dispatch/ops/runbooks/glz_12_autonomy_rollout_controls.md",
 });
 const VALID_TICKET_STATES = Object.freeze([
   "NEW",
@@ -201,6 +202,29 @@ const HOLD_REASON_CODES = Object.freeze([
   "CUSTOMER_CONFIRMATION_STALE",
 ]);
 const HOLD_REASON_SET = new Set(HOLD_REASON_CODES);
+const AUTONOMY_SCOPE_TYPES = Object.freeze(["GLOBAL", "INCIDENT", "TICKET"]);
+const AUTONOMY_SCOPE_TYPES_SET = new Set(AUTONOMY_SCOPE_TYPES);
+const AUTONOMY_CONTROL_SCOPE_PRECEDENCE = Object.freeze({
+  TICKET: 0,
+  INCIDENT: 1,
+  GLOBAL: 2,
+});
+const AUTONOMY_CONTROL_ACTIONS = Object.freeze({
+  PAUSE: "pause",
+  ROLLBACK: "rollback",
+});
+const AUTONOMY_HISTORY_PAYLOAD_KEYS = Object.freeze({
+  SCOPE_TYPE: "scope_type",
+  TICKET_ID: "ticket_id",
+  INCIDENT_TYPE: "incident_type",
+  REASON: "reason",
+});
+const AUTONOMY_CONTROL_SCOPE_FIELDS = Object.freeze([
+  "id",
+  "scope_type",
+  "incident_type",
+  "ticket_id",
+]);
 const MIN_REGION_WEIGHT = 10;
 const MAX_REGION_WEIGHT = 990;
 const DEFAULT_REGION_WEIGHT = 500;
@@ -232,6 +256,7 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   HOLD_CONFIRMATION_MISSING: "scheduling",
   HOLD_SNAPSHOT_MISSING: "scheduling",
   MANUAL_REVIEW_REQUIRED: "policy",
+  AUTONOMY_DISABLED: "policy",
 });
 const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "schedule_propose", tool_name: "schedule.propose" }),
@@ -753,6 +778,495 @@ function serializeEvidenceItem(row) {
     created_by: row.created_by,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
   };
+}
+
+function normalizeAutonomyScopeType(value, fieldName = "scope_type") {
+  const normalized = normalizeUppercaseString(value, fieldName);
+  if (!AUTONOMY_SCOPE_TYPES_SET.has(normalized)) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      `Field '${fieldName}' must be one of ${AUTONOMY_SCOPE_TYPES.join(", ")}`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeAutonomyIncidentType(value, fieldName = "incident_type") {
+  const normalized = normalizeUppercaseString(value, fieldName);
+  if (normalized.length === 0) {
+    throw new HttpError(400, "INVALID_REQUEST", `Field '${fieldName}' must be a non-empty string`);
+  }
+  return normalized;
+}
+
+function normalizeAutonomyControlScope(body, actionLabel) {
+  const requestedScopeType =
+    body?.scope_type == null ? "GLOBAL" : normalizeAutonomyScopeType(body.scope_type);
+  const reason = normalizeOptionalString(body?.reason, "reason");
+  if (requestedScopeType === "GLOBAL") {
+    if (body?.incident_type != null) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        "Field 'incident_type' is not allowed for GLOBAL scope",
+      );
+    }
+    if (body?.ticket_id != null) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        "Field 'ticket_id' is not allowed for GLOBAL scope",
+      );
+    }
+    return {
+      scope_type: requestedScopeType,
+      ticket_id: null,
+      incident_type: null,
+      reason,
+      action: actionLabel,
+    };
+  }
+
+  if (requestedScopeType === "INCIDENT") {
+    const incidentType = normalizeAutonomyIncidentType(body?.incident_type, "incident_type");
+    if (body?.ticket_id != null) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUEST",
+        "Field 'ticket_id' is not allowed for INCIDENT scope",
+      );
+    }
+    return {
+      scope_type: requestedScopeType,
+      ticket_id: null,
+      incident_type: incidentType,
+      reason,
+      action: actionLabel,
+    };
+  }
+
+  const ticketId = parseOptionalUuid(body?.ticket_id, "ticket_id");
+  if (ticketId == null) {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'ticket_id' is required for TICKET scope");
+  }
+  if (body?.incident_type != null) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "Field 'incident_type' is not allowed for TICKET scope",
+    );
+  }
+  return {
+    scope_type: requestedScopeType,
+    ticket_id: ticketId,
+    incident_type: null,
+    reason,
+    action: actionLabel,
+  };
+}
+
+function serializeAutonomyStateRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    scope_type: row.scope_type,
+    incident_type: row.incident_type ?? null,
+    ticket_id: row.ticket_id ?? null,
+    is_paused: Boolean(row.is_paused),
+    reason: row.reason ?? null,
+    actor_type: row.actor_type,
+    actor_id: row.actor_id,
+    actor_role: row.actor_role ?? null,
+    request_id: row.request_id,
+    correlation_id: row.correlation_id,
+    trace_id: row.trace_id,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
+    updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+function serializeAutonomyHistoryRow(row) {
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    scope_type: row.scope_type,
+    incident_type: row.incident_type ?? null,
+    ticket_id: row.ticket_id ?? null,
+    action: row.action,
+    previous_is_paused: row.previous_is_paused,
+    next_is_paused: row.next_is_paused,
+    actor_type: row.actor_type,
+    actor_id: row.actor_id,
+    actor_role: row.actor_role ?? null,
+    request_id: row.request_id,
+    correlation_id: row.correlation_id,
+    trace_id: row.trace_id,
+    reason: row.reason ?? null,
+    payload: row.payload ?? {},
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
+  };
+}
+
+function resolveAutonomyControlDecision(rows = []) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const ordered = normalizedRows.toSorted((left, right) => {
+    const leftPrecedence = AUTONOMY_CONTROL_SCOPE_PRECEDENCE[left.scope_type] ?? 99;
+    const rightPrecedence = AUTONOMY_CONTROL_SCOPE_PRECEDENCE[right.scope_type] ?? 99;
+    if (leftPrecedence !== rightPrecedence) {
+      return leftPrecedence - rightPrecedence;
+    }
+    return String(left.scope_type).localeCompare(String(right.scope_type));
+  });
+  const effective =
+    ordered.find((entry) => AUTONOMY_CONTROL_SCOPE_TYPES_SET.has(entry.scope_type)) ?? null;
+  return {
+    effective,
+    entries: ordered,
+  };
+}
+
+function resolveAutonomyControlPolicyForTicket(poolOrClient, params) {
+  const ticketId = params?.ticketId ?? null;
+  const incidentTypeRaw = params?.incidentType;
+  const incidentType =
+    typeof incidentTypeRaw === "string" && incidentTypeRaw.trim() !== ""
+      ? incidentTypeRaw.trim().toUpperCase()
+      : null;
+  return poolOrClient.query
+    ? poolOrClient
+        .query(
+          `
+            SELECT
+              scope_type,
+              incident_type,
+              ticket_id,
+              is_paused,
+              reason
+            FROM autonomy_control_state
+            WHERE scope_type = 'GLOBAL'
+              OR (scope_type = 'INCIDENT' AND $1 IS NOT NULL AND upper(incident_type) = upper($1))
+              OR (scope_type = 'TICKET' AND ticket_id = $2)
+          `,
+          [incidentType, ticketId],
+        )
+        .then((result) => resolveAutonomyControlDecision(result.rows))
+    : Promise.resolve({ entries: [], effective: null });
+}
+
+function buildAutonomyControlPolicyError(resolution, ticketId, incidentType) {
+  if (!resolution?.effective || !resolution.effective.is_paused) {
+    return null;
+  }
+
+  const source = resolution.effective;
+  return createActionPolicyError(
+    "AUTONOMY_DISABLED",
+    "Autonomy is paused for this ticket context",
+    {
+      scope_type: source.scope_type,
+      scope_id:
+        source.scope_type === "TICKET"
+          ? source.ticket_id
+          : source.scope_type === "INCIDENT"
+            ? source.incident_type
+            : "GLOBAL",
+      reason: source.reason ?? null,
+      incident_type: incidentType ?? null,
+      ticket_id: ticketId,
+    },
+  );
+}
+
+async function assertAutonomyNotDisabled(ticketRow, pool) {
+  const incidentType = ticketRow?.incident_type;
+  const ticketId = ticketRow?.id;
+  const resolution = await pool.query(
+    `
+      SELECT
+        scope_type,
+        incident_type,
+        ticket_id,
+        is_paused,
+        reason
+      FROM autonomy_control_state
+      WHERE scope_type = 'GLOBAL'
+        OR (scope_type = 'INCIDENT' AND upper(incident_type) = upper($1))
+        OR (scope_type = 'TICKET' AND ticket_id = $2)
+    `,
+    [incidentType, ticketId],
+  );
+
+  const decision = resolveAutonomyControlDecision(resolution.rows);
+  const policyError = buildAutonomyControlPolicyError(decision, ticketId, incidentType);
+  if (policyError) {
+    throw new HttpError(409, policyError.code, policyError.message, policyError);
+  }
+}
+
+function coalescePolicyError(...errors) {
+  for (const error of errors) {
+    if (error) {
+      return error;
+    }
+  }
+  return null;
+}
+
+function buildAutonomyScopeWhere(scopeType, incidentType, ticketId) {
+  if (scopeType === "GLOBAL") {
+    return {
+      clause: "scope_type = 'GLOBAL'",
+      values: [],
+    };
+  }
+  if (scopeType === "INCIDENT") {
+    return {
+      clause: "scope_type = 'INCIDENT' AND upper(incident_type) = upper($1)",
+      values: [incidentType],
+    };
+  }
+  return {
+    clause: "scope_type = 'TICKET' AND ticket_id = $1",
+    values: [ticketId],
+  };
+}
+
+function buildAutonomyControlQuery() {
+  return `
+    SELECT
+      id,
+      scope_type,
+      incident_type,
+      ticket_id,
+      is_paused,
+      reason,
+      actor_type,
+      actor_id,
+      actor_role,
+      request_id,
+      correlation_id,
+      trace_id,
+      created_at,
+      updated_at
+    FROM autonomy_control_state
+  `;
+}
+
+function buildAutonomyHistoryQuery() {
+  return `
+    SELECT
+      id,
+      control_state_id,
+      scope_type,
+      incident_type,
+      ticket_id,
+      action,
+      previous_is_paused,
+      next_is_paused,
+      actor_type,
+      actor_id,
+      actor_role,
+      request_id,
+      correlation_id,
+      trace_id,
+      reason,
+      payload,
+      created_at
+    FROM autonomy_control_history
+  `;
+}
+
+async function fetchAutonomyControlStateForScope(client, scopeType, incidentType, ticketId) {
+  const query = buildAutonomyControlQuery();
+  const where = buildAutonomyScopeWhere(scopeType, incidentType, ticketId);
+  const result = await client.query(
+    `
+      ${query}
+      WHERE ${where.clause}
+      LIMIT 1
+      FOR UPDATE
+    `,
+    where.values,
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return result.rows[0];
+}
+
+async function upsertAutonomyControlState(client, context) {
+  const { scope, isPaused, actor, requestId, correlationId, traceId } = context;
+  const existingState = await fetchAutonomyControlStateForScope(
+    client,
+    scope.scope_type,
+    scope.incident_type,
+    scope.ticket_id,
+  );
+  const previousState = existingState == null ? null : existingState.is_paused;
+
+  const stateResult = existingState
+    ? await client.query(
+        `
+          UPDATE autonomy_control_state
+          SET
+            is_paused = $1,
+            reason = $2,
+            actor_type = $3,
+            actor_id = $4,
+            actor_role = $5,
+            request_id = $6,
+            correlation_id = $7,
+            trace_id = $8,
+            updated_at = now()
+          WHERE id = $9
+          RETURNING *
+        `,
+        [
+          isPaused,
+          scope.reason,
+          actor.actorType,
+          actor.actorId,
+          actor.actorRole,
+          requestId,
+          correlationId,
+          traceId,
+          existingState.id,
+        ],
+      )
+    : await client.query(
+        `
+          INSERT INTO autonomy_control_state (
+            scope_type,
+            incident_type,
+            ticket_id,
+            is_paused,
+            reason,
+            actor_type,
+            actor_id,
+            actor_role,
+            request_id,
+            correlation_id,
+            trace_id
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING *
+        `,
+        [
+          scope.scope_type,
+          scope.incident_type,
+          scope.ticket_id,
+          isPaused,
+          scope.reason,
+          actor.actorType,
+          actor.actorId,
+          actor.actorRole,
+          requestId,
+          correlationId,
+          traceId,
+        ],
+      );
+
+  return {
+    state: stateResult.rows[0],
+    previousIsPaused: Boolean(previousState),
+    nextIsPaused: Boolean(isPaused),
+  };
+}
+
+async function insertAutonomyControlHistory(client, context) {
+  const {
+    state,
+    action,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    previousIsPaused,
+    nextIsPaused,
+    payload,
+  } = context;
+
+  const historyResult = await client.query(
+    `
+      INSERT INTO autonomy_control_history (
+        control_state_id,
+        scope_type,
+        incident_type,
+        ticket_id,
+        action,
+        previous_is_paused,
+        next_is_paused,
+        actor_type,
+        actor_id,
+        actor_role,
+        request_id,
+        correlation_id,
+        trace_id,
+        reason,
+        payload
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      RETURNING *
+    `,
+    [
+      state.id,
+      state.scope_type,
+      state.incident_type,
+      state.ticket_id,
+      action,
+      previousIsPaused,
+      nextIsPaused,
+      actor.actorType,
+      actor.actorId,
+      actor.actorRole,
+      requestId,
+      correlationId,
+      traceId,
+      state.reason,
+      payload,
+    ],
+  );
+
+  return historyResult.rows[0];
+}
+
+async function getAutonomyControlStates(clientOrPool) {
+  const query = buildAutonomyControlQuery();
+  const result = await clientOrPool.query(
+    `
+      ${query}
+      ORDER BY
+        CASE scope_type
+          WHEN 'TICKET' THEN 0
+          WHEN 'INCIDENT' THEN 1
+          WHEN 'GLOBAL' THEN 2
+          ELSE 99
+        END,
+        updated_at DESC,
+        id DESC
+    `,
+  );
+  return result.rows;
+}
+
+async function getAutonomyControlReplayRows(client, ticketId, incidentType) {
+  const result = await client.query(
+    `
+      ${buildAutonomyHistoryQuery()}
+      WHERE scope_type = 'GLOBAL'
+        OR (scope_type = 'INCIDENT' AND $1 IS NOT NULL AND upper(incident_type) = upper($1))
+        OR (scope_type = 'TICKET' AND ticket_id = $2)
+      ORDER BY created_at DESC, id DESC
+    `,
+    [incidentType, ticketId],
+  );
+  return result.rows;
 }
 
 function getCommandPolicy(endpoint) {
@@ -1606,9 +2120,14 @@ async function findOpenIntakeDuplicate(client, payload) {
   return result.rows[0];
 }
 
-async function linkDuplicateIntakeAttempt(client, context) {
+async function linkDuplicateIntakeAttempt(client, context = {}) {
   const { payload, existingTicket, actor, requestId, correlationId, traceId, blindIntakePolicy } =
     context;
+
+  if (!payload || !existingTicket || !actor || !blindIntakePolicy) {
+    throw new HttpError(409, "DUPLICATE_INTAKE", "Duplicate blind intake request detected");
+  }
+
   await insertAuditEvent(client, {
     ticketId: existingTicket.id,
     beforeState: existingTicket.state,
@@ -2102,6 +2621,18 @@ async function buildTechnicianJobPacketView(params) {
           invalid_evidence_refs: closeoutGate.invalid_evidence_refs,
         },
       );
+  let autonomyPolicyError = null;
+  if (typeof ticketRow.incident_type === "string" && ticketRow.incident_type.trim() !== "") {
+    const resolution = await resolveAutonomyControlPolicyForTicket(pool, {
+      ticketId,
+      incidentType: ticketRow.incident_type.trim(),
+    });
+    autonomyPolicyError = buildAutonomyControlPolicyError(
+      resolution,
+      ticketRow.id,
+      ticketRow.incident_type,
+    );
+  }
 
   const actions = TECH_PACKET_ACTION_BLUEPRINTS.map((blueprint) =>
     buildActionDescriptor({
@@ -2111,7 +2642,7 @@ async function buildTechnicianJobPacketView(params) {
       ticketState: ticketRow.state,
       ticketId: ticketRow.id,
       extraPolicyError: ["complete_work", "candidate"].includes(blueprint.action_id)
-        ? completeWorkPolicyError
+        ? coalescePolicyError(completeWorkPolicyError, autonomyPolicyError)
         : null,
     }),
   );
@@ -3074,12 +3605,12 @@ async function triageTicketMutation(client, context) {
     `
       UPDATE tickets
       SET
-        state = $2,
+        state = $2::ticket_state,
         priority = $3,
         incident_type = $4,
         nte_cents = COALESCE($5, nte_cents),
-        sop_handoff_acknowledged = CASE WHEN $2 = 'READY_TO_SCHEDULE' THEN true ELSE sop_handoff_acknowledged END,
-        sop_handoff_required = CASE WHEN $2 = 'READY_TO_SCHEDULE' THEN false ELSE sop_handoff_required END,
+        sop_handoff_acknowledged = CASE WHEN $2::text = 'READY_TO_SCHEDULE' THEN true ELSE sop_handoff_acknowledged END,
+        sop_handoff_required = CASE WHEN $2::text = 'READY_TO_SCHEDULE' THEN false ELSE sop_handoff_required END,
         version = version + 1
       WHERE id = $1
       RETURNING *
@@ -3540,7 +4071,7 @@ async function assignmentRecommendMutation(client, context) {
         site_region,
         candidates
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,($11)::jsonb)
       RETURNING id, recommendation_snapshot_id
     `,
     [
@@ -3554,7 +4085,7 @@ async function assignmentRecommendMutation(client, context) {
       recommendationLimit,
       serviceType,
       existing.site_region,
-      evaluatedCandidates,
+      JSON.stringify(evaluatedCandidates),
     ],
   );
   const snapshotRow = snapshot.rows[0];
@@ -3973,6 +4504,136 @@ async function rollbackScheduleMutation(client, context) {
           ? new Date(latestHoldSnapshot.scheduled_end).toISOString()
           : null,
       },
+    },
+  };
+}
+
+async function autonomyPauseMutation(client, context) {
+  const { body, actor, requestId, correlationId, traceId } = context;
+  ensureObject(body);
+  const scope = normalizeAutonomyControlScope(body, AUTONOMY_CONTROL_ACTIONS.PAUSE);
+  const controlChange = await upsertAutonomyControlState(client, {
+    scope,
+    isPaused: true,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+  });
+  const payload = {
+    action: AUTONOMY_CONTROL_ACTIONS.PAUSE,
+    scope_type: scope.scope_type,
+    incident_type: scope.incident_type,
+    ticket_id: scope.ticket_id,
+    reason: scope.reason,
+  };
+  const controlHistory = await insertAutonomyControlHistory(client, {
+    state: controlChange.state,
+    action: AUTONOMY_CONTROL_ACTIONS.PAUSE,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    previousIsPaused: controlChange.previousIsPaused,
+    nextIsPaused: controlChange.nextIsPaused,
+    payload,
+  });
+  await insertAuditEvent(client, {
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    ticketId: null,
+    beforeState: null,
+    afterState: null,
+    payload: {
+      endpoint: "/ops/autonomy/pause",
+      requested_at: nowIso(),
+      request: body,
+      previous_is_paused: controlChange.previousIsPaused,
+      current_is_paused: controlChange.nextIsPaused,
+      control_state_id: controlChange.state.id,
+      control_history_id: controlHistory.id,
+      scope,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      action: AUTONOMY_CONTROL_ACTIONS.PAUSE,
+      scope: serializeAutonomyStateRow(controlChange.state),
+      previous_is_paused: controlChange.previousIsPaused,
+      current_is_paused: controlChange.nextIsPaused,
+      history_id: controlHistory.id,
+    },
+  };
+}
+
+async function autonomyRollbackMutation(client, context) {
+  const { body, actor, requestId, correlationId, traceId } = context;
+  ensureObject(body);
+  const scope = normalizeAutonomyControlScope(body, AUTONOMY_CONTROL_ACTIONS.ROLLBACK);
+  const controlChange = await upsertAutonomyControlState(client, {
+    scope,
+    isPaused: false,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+  });
+  const payload = {
+    action: AUTONOMY_CONTROL_ACTIONS.ROLLBACK,
+    scope_type: scope.scope_type,
+    incident_type: scope.incident_type,
+    ticket_id: scope.ticket_id,
+    reason: scope.reason,
+  };
+  const controlHistory = await insertAutonomyControlHistory(client, {
+    state: controlChange.state,
+    action: AUTONOMY_CONTROL_ACTIONS.ROLLBACK,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    previousIsPaused: controlChange.previousIsPaused,
+    nextIsPaused: controlChange.nextIsPaused,
+    payload,
+  });
+  await insertAuditEvent(client, {
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    ticketId: null,
+    beforeState: null,
+    afterState: null,
+    payload: {
+      endpoint: "/ops/autonomy/rollback",
+      requested_at: nowIso(),
+      request: body,
+      previous_is_paused: controlChange.previousIsPaused,
+      current_is_paused: controlChange.nextIsPaused,
+      control_state_id: controlChange.state.id,
+      control_history_id: controlHistory.id,
+      scope,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      action: AUTONOMY_CONTROL_ACTIONS.ROLLBACK,
+      scope: serializeAutonomyStateRow(controlChange.state),
+      previous_is_paused: controlChange.previousIsPaused,
+      current_is_paused: controlChange.nextIsPaused,
+      history_id: controlHistory.id,
     },
   };
 }
@@ -4623,6 +5284,7 @@ async function techCompleteMutation(client, context) {
   const existing = await getTicketForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/tech/complete", existing.state, body);
+  await assertAutonomyNotDisabled(existing, client);
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
     throw new HttpError(
@@ -4792,6 +5454,7 @@ async function closeoutCandidateMutation(client, context) {
   const existing = await getTicketForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/closeout/candidate", existing.state, body);
+  await assertAutonomyNotDisabled(existing, client);
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
     throw new HttpError(
@@ -4984,6 +5647,22 @@ function resolveRoute(method, pathname) {
     return {
       kind: "alerts",
       endpoint: "/ops/alerts",
+    };
+  }
+
+  if (method === "GET" && pathname === "/ops/autonomy/state") {
+    return {
+      kind: "ops_autonomy_state",
+      endpoint: "/ops/autonomy/state",
+    };
+  }
+
+  const autonomyReplayMatch = pathname.match(/^\/ops\/autonomy\/replay\/([^/]+)$/);
+  if (method === "GET" && autonomyReplayMatch && ticketRouteRegex.test(autonomyReplayMatch[1])) {
+    return {
+      kind: "ops_autonomy_replay",
+      endpoint: "/ops/autonomy/replay/{ticketId}",
+      ticketId: autonomyReplayMatch[1],
     };
   }
 
@@ -5226,6 +5905,24 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  if (method === "POST" && pathname === "/ops/autonomy/pause") {
+    return {
+      kind: "command",
+      endpoint: "/ops/autonomy/pause",
+      handler: autonomyPauseMutation,
+      ticketId: null,
+    };
+  }
+
+  if (method === "POST" && pathname === "/ops/autonomy/rollback") {
+    return {
+      kind: "command",
+      endpoint: "/ops/autonomy/rollback",
+      handler: autonomyRollbackMutation,
+      ticketId: null,
+    };
+  }
+
   return null;
 }
 
@@ -5406,6 +6103,145 @@ export function createDispatchApiServer(options = {}) {
           actor_role: actor.actorRole,
           tool_name: actor.toolName,
           ticket_id: null,
+          replay: false,
+          status: 200,
+          duration_ms: Date.now() - requestStart,
+        });
+        return;
+      }
+
+      if (route.kind === "ops_autonomy_state") {
+        actor = authRuntime.resolveActor(request.headers, route);
+        const rawTicketId = url.searchParams.get("ticket_id");
+        const rawIncidentType = url.searchParams.get("incident_type");
+        const ticketId =
+          rawTicketId == null || String(rawTicketId).trim() === ""
+            ? null
+            : String(rawTicketId).trim();
+        let targetTicket = null;
+        if (ticketId != null) {
+          validateTicketId(ticketId);
+          targetTicket = await getTicket(pool, ticketId);
+          authRuntime.assertActorScopeForTarget(actor, {
+            accountId: targetTicket.account_id,
+            siteId: targetTicket.site_id,
+          });
+        }
+
+        const incidentType =
+          rawIncidentType == null || String(rawIncidentType).trim() === ""
+            ? null
+            : String(rawIncidentType).trim().toUpperCase();
+        const controls = await getAutonomyControlStates(pool);
+        const decision = ticketId
+          ? await resolveAutonomyControlPolicyForTicket(pool, {
+              ticketId,
+              incidentType:
+                incidentType ??
+                (typeof targetTicket?.incident_type === "string"
+                  ? targetTicket.incident_type.trim()
+                  : null),
+            })
+          : { entries: [], effective: null };
+        sendJson(response, 200, {
+          generated_at: nowIso(),
+          controls: controls.map(serializeAutonomyStateRow),
+          decision: decision.effective
+            ? {
+                scope_type: decision.effective.scope_type,
+                incident_type: decision.effective.incident_type ?? null,
+                ticket_id: decision.effective.ticket_id ?? null,
+                is_paused: Boolean(decision.effective.is_paused),
+                reason: decision.effective.reason ?? null,
+              }
+            : null,
+          chain: decision.entries.map(serializeAutonomyStateRow),
+          query: {
+            ticket_id: ticketId,
+            incident_type: incidentType,
+          },
+        });
+        metrics.incrementRequest(requestMethod, route.endpoint, 200);
+        emitLog("info", {
+          method: requestMethod,
+          path: url.pathname,
+          endpoint: route.endpoint,
+          request_id: null,
+          correlation_id: correlationId,
+          trace_id: traceId,
+          actor_type: actor.actorType,
+          actor_id: actor.actorId,
+          actor_role: actor.actorRole,
+          tool_name: actor.toolName,
+          ticket_id: ticketId,
+          replay: false,
+          status: 200,
+          duration_ms: Date.now() - requestStart,
+        });
+        return;
+      }
+
+      if (route.kind === "ops_autonomy_replay") {
+        actor = authRuntime.resolveActor(request.headers, route);
+        const ticket = await getTicket(pool, route.ticketId);
+        authRuntime.assertActorScopeForTarget(actor, {
+          accountId: ticket.account_id,
+          siteId: ticket.site_id,
+        });
+        const incidentType = ticket.incident_type;
+        const decision = await resolveAutonomyControlPolicyForTicket(pool, {
+          ticketId: route.ticketId,
+          incidentType,
+        });
+        const controls = await pool.query(
+          `
+            ${buildAutonomyControlQuery()}
+            WHERE scope_type = 'GLOBAL'
+              OR (scope_type = 'INCIDENT' AND $1 IS NOT NULL AND upper(incident_type) = upper($1))
+              OR (scope_type = 'TICKET' AND ticket_id = $2)
+            ORDER BY
+              CASE scope_type
+                WHEN 'TICKET' THEN 0
+                WHEN 'INCIDENT' THEN 1
+                WHEN 'GLOBAL' THEN 2
+                ELSE 99
+              END,
+              updated_at DESC,
+              id DESC
+          `,
+          [incidentType, route.ticketId],
+        );
+        const history = await getAutonomyControlReplayRows(pool, route.ticketId, incidentType);
+        sendJson(response, 200, {
+          generated_at: nowIso(),
+          ticket_id: route.ticketId,
+          incident_type: incidentType,
+          decision: decision.effective
+            ? {
+                scope_type: decision.effective.scope_type,
+                incident_type: decision.effective.incident_type ?? null,
+                ticket_id: decision.effective.ticket_id ?? null,
+                is_paused: Boolean(decision.effective.is_paused),
+                reason: decision.effective.reason ?? null,
+              }
+            : null,
+          chain: decision.entries.map(serializeAutonomyStateRow),
+          controls: controls.rows.map(serializeAutonomyStateRow),
+          history: history.map(serializeAutonomyHistoryRow),
+        });
+        metrics.incrementRequest(requestMethod, route.endpoint, 200);
+        emitLog("info", {
+          method: requestMethod,
+          path: url.pathname,
+          endpoint: route.endpoint,
+          request_id: null,
+          correlation_id: correlationId,
+          trace_id: traceId,
+          actor_type: actor.actorType,
+          actor_id: actor.actorId,
+          actor_role: actor.actorRole,
+          tool_name: actor.toolName,
+          ticket_id: route.ticketId,
           replay: false,
           status: 200,
           duration_ms: Date.now() - requestStart,

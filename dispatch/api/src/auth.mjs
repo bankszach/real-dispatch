@@ -17,6 +17,8 @@ const READ_ENDPOINT_TOOL_NAMES = Object.freeze({
   "/tickets/{ticketId}/evidence": "closeout.list_evidence",
   "/ux/dispatcher/cockpit": "dispatcher.cockpit",
   "/ux/technician/job-packet/{ticketId}": "tech.job_packet",
+  "/ops/autonomy/state": "ops.autonomy.state",
+  "/ops/autonomy/replay/{ticketId}": "ops.autonomy.replay",
 });
 
 function buildReadEndpointPolicies() {
@@ -301,7 +303,9 @@ function resolveEndpointPolicy(route) {
     route.kind === "timeline" ||
     route.kind === "evidence" ||
     route.kind === "dispatcher_cockpit" ||
-    route.kind === "tech_job_packet"
+    route.kind === "tech_job_packet" ||
+    route.kind === "ops_autonomy_state" ||
+    route.kind === "ops_autonomy_replay"
   ) {
     const readPolicy = READ_ENDPOINT_POLICIES[route.endpoint];
     if (!readPolicy) {

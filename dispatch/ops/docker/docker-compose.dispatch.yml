@@ -2,7 +2,7 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -33,7 +33,7 @@ services:
   dispatch-api:
     image: ${DISPATCH_API_IMAGE:-openclaw:local}
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -43,9 +43,12 @@ services:
       DISPATCH_OBJECT_STORE_BUCKET: ${DISPATCH_OBJECT_STORE_BUCKET:-dispatch-artifacts}
       DISPATCH_OBJECT_STORE_KEY: ${DISPATCH_OBJECT_STORE_KEY:-minioadmin}
       DISPATCH_OBJECT_STORE_SECRET: ${DISPATCH_OBJECT_STORE_SECRET:-minioadmin}
+      DISPATCH_AUTH_ALLOW_DEV_HEADERS: ${DISPATCH_AUTH_ALLOW_DEV_HEADERS:-true}
     depends_on:
-      - postgres
-      - minio
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
     ports:
       - "${DISPATCH_API_PORT:-8080}:8080"
     command: ["node", "dispatch/api/src/server.mjs"]
@@ -53,15 +56,17 @@ services:
   dispatch-worker:
     image: ${DISPATCH_WORKER_IMAGE:-openclaw:local}
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
       DISPATCH_API_URL: ${DISPATCH_API_URL:-http://dispatch-api:8080}
     depends_on:
-      - dispatch-api
-      - postgres
+      dispatch-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     command: ["node", "dispatch/worker/dispatch-worker-placeholder.mjs"]
 
   postgres:
@@ -73,6 +78,11 @@ services:
       POSTGRES_DB: dispatch
     volumes:
       - dispatch-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   minio:
     image: minio/minio:latest

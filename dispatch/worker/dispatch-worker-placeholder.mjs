@@ -192,7 +192,7 @@ function normalizeQueuedTicket(ticket) {
     state: ticket.state,
     service_type: ticket.incident_type || "DEFAULT",
     site_id: ticket.site_id || null,
-    assigned_tech_id: ticket.assigned_tech || null,
+    assigned_tech_id: ticket.assigned_tech_id || ticket.assigned_tech || null,
   };
 }
 
@@ -428,7 +428,7 @@ async function runWorkerLoop() {
     api_base: apiBaseUrl,
     heartbeat_ms: heartbeatMs,
     loop_ms: loopMs,
-    batch_limit,
+    batch_limit: batchLimit,
     request_timeout_ms: requestTimeoutMs,
     idempotency_profile: "ticket-scoped deterministic uuid",
   });

@@ -25,6 +25,10 @@ const readinessRunbookPath = path.resolve(
   repoRoot,
   "dispatch/ops/runbooks/mvp_08_pilot_cutover_readiness.md",
 );
+const v0LaunchGatePacketPath = path.resolve(
+  repoRoot,
+  "dispatch/ops/runbooks/v0_launch_gate_evidence_packet.md",
+);
 
 const postgresContainer = "rd-story08-pilot-uat";
 const postgresPort = 55443;
@@ -663,4 +667,18 @@ test("pilot readiness runbook and checklist artifacts are published and explicit
   assert.match(content, /Release Candidate Freeze/i);
   assert.match(content, /dispatcher\/technician lifecycle/i);
   assert.match(content, /top incident templates/i);
+});
+
+test("V0 launch gate evidence packet is published and references required controls", () => {
+  assert.ok(fs.existsSync(v0LaunchGatePacketPath), "V0 launch gate evidence packet should exist");
+  const content = fs.readFileSync(v0LaunchGatePacketPath, "utf8");
+
+  assert.ok(content.trim().length > 0);
+  assert.match(content, /V0-LAUNCH-GATE/i);
+  assert.match(content, /GLZ-10|GLZ-11|GLZ-12/i);
+  assert.match(content, /autonomy/);
+  assert.match(content, /pilot readiness/i);
+  assert.match(content, /dispatch\\/tests\\/mvp_08_pilot_readiness\\.node\\.test\\.mjs/i);
+  assert.match(content, /dispatch\\/tests\\/story_glz_12_autonomy_rollout_controls\\.node\\.test\\.mjs/i);
+  assert.match(content, /dispatcher\\/technician lifecycle/i);
 });

@@ -133,6 +133,33 @@ CREATE TABLE IF NOT EXISTS tickets (
 
 ALTER TABLE IF EXISTS tickets
   ADD COLUMN IF NOT EXISTS identity_signature text;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS customer_name text;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS customer_phone text;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS customer_email text;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS identity_confidence int CHECK (
+    identity_confidence IS NULL OR (identity_confidence >= 0 AND identity_confidence <= 100)
+  );
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS classification_confidence int CHECK (
+    classification_confidence IS NULL OR
+    (classification_confidence >= 0 AND classification_confidence <= 100)
+  );
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS sop_handoff_required boolean NOT NULL DEFAULT false;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS sop_handoff_acknowledged boolean NOT NULL DEFAULT false;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS sop_handoff_prompt text;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD' CHECK (length(trim(currency)) = 3);
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS assigned_provider_id uuid;
+ALTER TABLE IF EXISTS tickets
+  ADD COLUMN IF NOT EXISTS assigned_tech_id uuid;
 
 CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
 CREATE INDEX IF NOT EXISTS idx_tickets_site ON tickets(site_id);
@@ -212,6 +239,71 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
 
 CREATE INDEX IF NOT EXISTS idx_transitions_ticket_created ON ticket_state_transitions(ticket_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_transitions_from_to ON ticket_state_transitions(from_state, to_state);
+
+CREATE TABLE IF NOT EXISTS autonomy_control_state (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope_type text NOT NULL CHECK (scope_type IN ('GLOBAL', 'INCIDENT', 'TICKET')),
+  incident_type text,
+  ticket_id uuid REFERENCES tickets(id) ON DELETE CASCADE,
+  is_paused boolean NOT NULL DEFAULT false,
+  reason text,
+  actor_type actor_type NOT NULL,
+  actor_id text NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role text,
+  request_id uuid NOT NULL,
+  correlation_id text,
+  trace_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_autonomy_control_scope_definition CHECK (
+    (scope_type = 'GLOBAL' AND ticket_id IS NULL AND incident_type IS NULL) OR
+    (scope_type = 'INCIDENT' AND ticket_id IS NULL AND incident_type IS NOT NULL AND length(trim(incident_type)) > 0) OR
+    (scope_type = 'TICKET' AND ticket_id IS NOT NULL AND incident_type IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_autonomy_control_global
+  ON autonomy_control_state (scope_type)
+  WHERE scope_type = 'GLOBAL';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_autonomy_control_incident
+  ON autonomy_control_state (upper(incident_type))
+  WHERE scope_type = 'INCIDENT';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_autonomy_control_ticket
+  ON autonomy_control_state (ticket_id)
+  WHERE scope_type = 'TICKET';
+
+CREATE INDEX IF NOT EXISTS idx_autonomy_control_state_scope
+  ON autonomy_control_state (scope_type, is_paused, updated_at);
+
+CREATE TABLE IF NOT EXISTS autonomy_control_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  control_state_id uuid REFERENCES autonomy_control_state(id) ON DELETE SET NULL,
+  scope_type text NOT NULL CHECK (scope_type IN ('GLOBAL', 'INCIDENT', 'TICKET')),
+  incident_type text,
+  ticket_id uuid,
+  action text NOT NULL CHECK (action IN ('pause', 'rollback')),
+  previous_is_paused boolean NOT NULL,
+  next_is_paused boolean NOT NULL,
+  actor_type actor_type NOT NULL,
+  actor_id text NOT NULL CHECK (length(trim(actor_id)) > 0),
+  actor_role text,
+  request_id uuid NOT NULL,
+  correlation_id text,
+  trace_id text,
+  reason text,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_autonomy_history_scope_definition CHECK (
+    (scope_type = 'GLOBAL' AND ticket_id IS NULL AND incident_type IS NULL) OR
+    (scope_type = 'INCIDENT' AND ticket_id IS NULL AND incident_type IS NOT NULL AND length(trim(incident_type)) > 0) OR
+    (scope_type = 'TICKET' AND ticket_id IS NOT NULL AND incident_type IS NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_autonomy_control_history_scope
+  ON autonomy_control_history (scope_type, created_at);
 
 CREATE TABLE IF NOT EXISTS assignment_recommendation_snapshots (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
