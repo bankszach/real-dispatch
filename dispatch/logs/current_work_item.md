@@ -2,7 +2,7 @@
 
 **Canonical planning source:** `real-dispatch-agile-package/README.md`  
 Backlog: `real-dispatch-agile-package/02-Backlog/02-Stories.md`  
-Sprint plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`  
+Current sprint source: `real-dispatch-agile-package/03-Delivery/Current-Sprint.md`  
 PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## Story ID
@@ -19,7 +19,7 @@ PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## Suggested Focus Area
 
-Follow the execution order in `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md` and confirm the active story in `real-dispatch-agile-package/02-Backlog/02-Stories.md` (Feature `E12`, Story `S1`).
+Follow the execution order in `real-dispatch-agile-package/03-Delivery/Current-Sprint.md` and confirm the active story in `real-dispatch-agile-package/02-Backlog/02-Stories.md` (Feature `E12`, Story `S1`).
 
 - `E12-F1-S1`: Publish runbooks and dashboard evidence paths.
 - `E7-F2-S1`: Enforce autonomy pause (data + control planes).

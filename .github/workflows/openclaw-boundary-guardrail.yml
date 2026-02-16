@@ -1,0 +1,61 @@
+name: OpenClaw boundary guardrail
+
+on:
+  pull_request:
+
+jobs:
+  forbid-new-openclaw-mentions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate PR does not introduce OpenClaw mentions outside legacy paths
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "::error::Could not determine base branch for PR."
+            exit 1
+          fi
+
+          git fetch --depth 1 origin "${BASE_REF}"
+          DIFF_RANGE="origin/${BASE_REF}...HEAD"
+
+          is_legacy_path() {
+            case "$1" in
+              src/*|extensions/*|apps/*|docs/*|packages/*|hooks/*|scripts/*|ui/*|assets/*|.github/*|tools/*|dispatch/ops/*|dispatch/LOCK_IN_CHARTER.md|dispatch/README.md|dispatch/ops/docker/*|real-dispatch-agile-package/10-Appendix/*|real-dispatch-agile-package/03-Delivery/Current-Sprint.md|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.json|tsconfig.*json|openclaw.mjs|real-dispatch-agile-package/README.md)
+              README.md)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          has_violation=0
+
+          while IFS= read -r file; do
+            if is_legacy_path "$file"; then
+              continue
+            fi
+
+            added_openclaw=$(git diff --unified=0 "$DIFF_RANGE" -- "$file" | grep -E '^\+[^+].*openclaw' -i || true)
+            if [ -n "$added_openclaw" ]; then
+              has_violation=1
+              echo "::error file=$file::Added OpenClaw mention(s):"
+              printf '%s\n' "$added_openclaw"
+            fi
+          done < <(git diff --name-only --diff-filter=ACMRTUXB "$DIFF_RANGE")
+
+          if [ "$has_violation" -ne 0 ]; then
+            echo "::error::This PR introduces OpenClaw mentions outside legacy paths."
+            echo "Allowed legacy paths: src/, extensions/, apps/, docs/, packages/, hooks/, scripts/, ui/, assets/, .github/, dispatch/ops, dispatch/README.md, and documented appendix paths."
+            exit 1
+          fi

@@ -44,6 +44,9 @@ Runtime baseline: Node **22+**.
 
 ## Pull request expectations
 
+- Use `E#-F#-S#` at the start of the PR title.
+  - Example: `E1-F1-S1: add contracts package`
+
 - Keep scope focused and explain behavioral impact.
 - Include tests for logic changes.
 - Call out security implications when touching tools, routing, or permissions.

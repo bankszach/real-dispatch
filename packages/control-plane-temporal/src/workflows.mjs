@@ -4,8 +4,99 @@ const { readTicket, readTimeline } = proxyActivities({
   startToCloseTimeout: "1 minute",
 });
 
+const { holdSchedule, releaseSchedule } = proxyActivities({
+  startToCloseTimeout: "1 minute",
+});
+
+function formatError(message) {
+  return new Error(message);
+}
+
 function toSafeObject(value) {
   return value && typeof value === "object" ? value : null;
+}
+
+function normalizeTicketId(input) {
+  const rawTicketId = input?.ticketId ?? input?.ticket_id ?? input?.id ?? "";
+  if (typeof rawTicketId !== "string") {
+    return "";
+  }
+  return rawTicketId.trim();
+}
+
+function normalizeHoldPayload(input) {
+  const holdReason =
+    typeof input?.hold_reason === "string" && input.hold_reason.trim() !== ""
+      ? input.hold_reason.trim().toUpperCase()
+      : undefined;
+  const confirmationWindow = input?.confirmation_window;
+
+  const start = confirmationWindow?.start;
+  const end = confirmationWindow?.end;
+
+  if (typeof start !== "string" || typeof end !== "string") {
+    const now = new Date();
+    const defaultWindow = {
+      start: now.toISOString(),
+      end: new Date(now.getTime() + 15 * 60_000).toISOString(),
+    };
+    return {
+      hold_reason: holdReason || "CUSTOMER_PENDING",
+      confirmation_window: defaultWindow,
+    };
+  }
+
+  return {
+    hold_reason: holdReason || "CUSTOMER_PENDING",
+    confirmation_window: {
+      start,
+      end,
+    },
+  };
+}
+
+export async function runScheduleHoldReleaseWorkflow(input = {}, adapters = {}) {
+  const ticketId = normalizeTicketId(input);
+  if (ticketId === "") {
+    throw formatError("ticketId is required");
+  }
+
+  const holdScheduleFn = adapters.holdSchedule;
+  const releaseScheduleFn = adapters.releaseSchedule;
+  if (typeof holdScheduleFn !== "function" || typeof releaseScheduleFn !== "function") {
+    throw formatError("holdSchedule and releaseSchedule activities are required");
+  }
+
+  if (typeof adapters.readTicket === "function") {
+    const preState = await adapters.readTicket(ticketId);
+    if (!preState || typeof preState !== "object") {
+      throw formatError(`ticket ${ticketId} not found`);
+    }
+  }
+
+  const normalizedHold = normalizeHoldPayload(input);
+  const hold = await holdScheduleFn(ticketId, {
+    holdReason: normalizedHold.hold_reason,
+    confirmationWindow: normalizedHold.confirmation_window,
+  });
+
+  const release = await releaseScheduleFn(ticketId, {
+    confirmationLog: hold.hold_id,
+  });
+
+  let timelineLength = 0;
+  if (typeof adapters.readTimeline === "function") {
+    const timeline = await adapters.readTimeline(ticketId);
+    timelineLength = Array.isArray(timeline?.events) ? timeline.events.length : 0;
+  }
+
+  return {
+    ticket_id: ticketId,
+    hold_id: hold.hold_id,
+    hold_state: hold.hold_state || hold.ticket?.state || "PENDING_CUSTOMER_CONFIRMATION",
+    released_state: release.ticket?.state || release.restored_state || null,
+    timeline_length: timelineLength,
+  };
 }
 
 export async function ticketReadbackWorkflow(input) {
@@ -28,4 +119,13 @@ export async function ticketReadbackWorkflow(input) {
     timelineLength: Array.isArray(timeline) ? timeline.length : 0,
   };
   return closureArtifact;
+}
+
+export async function scheduleHoldReleaseWorkflow(input) {
+  return runScheduleHoldReleaseWorkflow(input, {
+    readTicket,
+    readTimeline,
+    holdSchedule,
+    releaseSchedule,
+  });
 }

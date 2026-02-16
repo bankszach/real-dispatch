@@ -2,7 +2,7 @@
 
 **Canonical planning source:** `real-dispatch-agile-package/README.md`  
 Backlog: `real-dispatch-agile-package/02-Backlog/02-Stories.md`  
-Sprint plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`  
+Current sprint source: `real-dispatch-agile-package/03-Delivery/Current-Sprint.md`  
 PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
 ## Readiness Note
@@ -10,7 +10,7 @@ PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 Current backlog is in post-v0 transition mode and now tracks vNext readiness work in `E#-F#-S#` story form.
 
 - Readiness pack: `real-dispatch-agile-package/02-Backlog/02-Stories.md`
-- Core plan: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`
+- Core plan: `real-dispatch-agile-package/03-Delivery/Current-Sprint.md`
 
 ## Next active story is
 

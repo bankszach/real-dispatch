@@ -4,6 +4,8 @@
 
 Real Dispatch uses OpenClaw as a control plane and keeps all operational truth in a dedicated dispatch data plane.
 
+OpenClaw references in this repository are legacy/control-plane infrastructure. Real Dispatch vNext product behavior, state model, and delivery workflow ownership remain product-owned and do not depend on OpenClaw domain rules.
+
 ## Product direction (locked)
 
 - OpenClaw is the control plane: channels, sessions, routing, scheduler, runtime.
@@ -79,6 +81,7 @@ Role policies and transition boundaries are defined in `/AGENTS.md`.
 Canonical agile planning source:
 
 - [real-dispatch-agile-package](real-dispatch-agile-package/README.md)
+- [Current sprint](real-dispatch-agile-package/03-Delivery/Current-Sprint.md)
 - [Definition of Done](real-dispatch-agile-package/02-Backlog/00-Definition-of-Done.md)
 - [Stories and epic sequence](real-dispatch-agile-package/02-Backlog/02-Stories.md)
 - [Release gates](real-dispatch-agile-package/03-Delivery/00-Release-Gates.md)
