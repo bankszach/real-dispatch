@@ -5,6 +5,9 @@ import {
   extractTraceContextFromHeaders,
   parseTraceParent,
   validateDispatchCommand,
+  validateThinSliceWorkflowCommand,
+  THIN_SLICE_EVENTS,
+  THIN_SLICE_SCHEMA_VERSION,
 } from "../src/index.mjs";
 
 test("parseTraceParent accepts W3C traceparent and exposes trace id", () => {
@@ -51,4 +54,55 @@ test("validateDispatchCommand enforces required envelope fields", () => {
   });
   assert.equal(invalidResult.ok, false);
   assert.ok(invalidResult.errors.length >= 1);
+});
+
+test("validateThinSliceWorkflowCommand enforces required workflow envelope fields", () => {
+  const valid = validateThinSliceWorkflowCommand({
+    ticket_id: "ticket-1",
+    policy_context: { priority: "standard" },
+    requested_window: {
+      start: "2026-02-16T09:00:00Z",
+      end: "2026-02-16T10:00:00Z",
+    },
+    envelope: {
+      correlation_id: "corr-1",
+      causation_id: "corr-0",
+      idempotency_key: "idem-1",
+      ticket_id: "ticket-1",
+      actor: {
+        id: "dispatcher-1",
+        role: "dispatcher",
+        type: "AGENT",
+      },
+      timestamp: "2026-02-16T08:30:00Z",
+      schema_version: THIN_SLICE_SCHEMA_VERSION,
+      event_name: THIN_SLICE_EVENTS.WORKFLOW_REQUESTED,
+    },
+  });
+  assert.equal(valid.ok, true);
+
+  const invalid = validateThinSliceWorkflowCommand({
+    ticket_id: "ticket-1",
+    policy_context: { priority: "standard" },
+    requested_window: {
+      start: "2026-02-16T09:00:00Z",
+      end: "",
+    },
+    envelope: {
+      correlation_id: "corr-1",
+      causation_id: "corr-0",
+      idempotency_key: "idem-1",
+      ticket_id: "ticket-1",
+      actor: {
+        id: "dispatcher-1",
+        role: "dispatcher",
+        type: "AGENT",
+      },
+      timestamp: "2026-02-16T08:30:00Z",
+      schema_version: THIN_SLICE_SCHEMA_VERSION,
+      event_name: "invalid.event",
+    },
+  });
+  assert.equal(invalid.ok, false);
+  assert.ok(invalid.errors.length >= 1);
 });
