@@ -29,8 +29,7 @@ jobs:
 
           is_legacy_path() {
             case "$1" in
-              src/*|extensions/*|apps/*|docs/*|packages/*|hooks/*|scripts/*|ui/*|assets/*|.github/*|tools/*|dispatch/ops/*|dispatch/LOCK_IN_CHARTER.md|dispatch/README.md|dispatch/ops/docker/*|real-dispatch-agile-package/10-Appendix/*|real-dispatch-agile-package/03-Delivery/Current-Sprint.md|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.json|tsconfig.*json|openclaw.mjs|real-dispatch-agile-package/README.md)
-              README.md)
+              dispatch/logs/*|dispatch/logs/*/*|dispatch/logs/*/*/*|docs/archive/*|docs/archive/*/*|docs/archive/*/*/*|real-dispatch-agile-package/10-Appendix/*|real-dispatch-agile-package/10-Appendix/*/*)
                 return 0
                 ;;
               *)
@@ -56,6 +55,6 @@ jobs:
 
           if [ "$has_violation" -ne 0 ]; then
             echo "::error::This PR introduces OpenClaw mentions outside legacy paths."
-            echo "Allowed legacy paths: src/, extensions/, apps/, docs/, packages/, hooks/, scripts/, ui/, assets/, .github/, dispatch/ops, dispatch/README.md, and documented appendix paths."
+            echo "Allowed legacy paths: dispatch/logs/**, docs/archive/**, and real-dispatch-agile-package/10-Appendix/** only."
             exit 1
           fi
