@@ -14,6 +14,32 @@ export interface DispatchActor {
   type: string;
 }
 
+export interface ThinSliceWorkflowEnvelope {
+  correlation_id: string;
+  causation_id: string;
+  idempotency_key: string;
+  ticket_id: string;
+  actor: DispatchActor;
+  timestamp: string;
+  schema_version: string;
+  traceparent?: string | null;
+  tracestate?: string | null;
+  event_name: string;
+  step_name?: string | null;
+}
+
+export interface ThinSliceWindow {
+  start: string;
+  end: string;
+}
+
+export interface ThinSliceWorkflowCommand {
+  ticket_id: string;
+  policy_context: Record<string, unknown>;
+  requested_window: ThinSliceWindow;
+  envelope: ThinSliceWorkflowEnvelope;
+}
+
 export interface DispatchCommand<TPayload = Record<string, unknown>> {
   tenantId: string;
   toolName: string;

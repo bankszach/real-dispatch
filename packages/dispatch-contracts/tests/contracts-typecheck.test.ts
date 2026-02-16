@@ -1,5 +1,6 @@
 import type {
   DispatchCommand,
+  ThinSliceWorkflowCommand,
   PolicyDecision,
   OutboxEvent,
   EvidenceRecord,
@@ -18,6 +19,31 @@ const dispatchCommand: DispatchCommand = {
   correlationId: "corr-1",
   payload: {
     issue: "Door jam",
+  },
+};
+
+const thinSliceWorkflowCommand: ThinSliceWorkflowCommand = {
+  ticket_id: "ticket-1",
+  policy_context: {
+    urgency: "normal",
+  },
+  requested_window: {
+    start: "2026-02-16T09:00:00Z",
+    end: "2026-02-16T10:00:00Z",
+  },
+  envelope: {
+    correlation_id: "corr-1",
+    causation_id: "corr-0",
+    idempotency_key: "idem-1",
+    ticket_id: "ticket-1",
+    actor: {
+      id: "dispatcher-1",
+      role: "dispatcher",
+      type: "AGENT",
+    },
+    timestamp: "2026-02-16T08:30:00Z",
+    schema_version: "v1",
+    event_name: "dispatch.thin_slice.workflow_requested",
   },
 };
 
@@ -81,6 +107,7 @@ const invalidOutboxEvent: OutboxEvent = {
 
 export {
   dispatchCommand,
+  thinSliceWorkflowCommand,
   policyDecision,
   outboxEvent,
   evidenceRecord,

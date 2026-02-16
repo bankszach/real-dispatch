@@ -2,6 +2,15 @@ const DECISION_VALUES = ["ALLOW", "DENY", "REQUIRE_APPROVAL", "REQUIRE_EVIDENCE"
 const COMMS_DIRECTIONS = ["INBOUND", "OUTBOUND"];
 const RETENTION_CLASS_VALUES = ["SHORT", "STANDARD", "LONG_TERM", "REGULATORY"];
 const REDACTION_STATES = ["NONE", "PENDING", "REDACTED"];
+const THIN_SLICE_SCHEMA_VERSION = "v1";
+const THIN_SLICE_EVENTS = Object.freeze({
+  WORKFLOW_REQUESTED: "dispatch.thin_slice.workflow_requested",
+  HOLD_CREATED: "dispatch.thin_slice.hold_created",
+  HOLD_COMMITTED: "dispatch.thin_slice.hold_committed",
+  HOLD_RELEASED: "dispatch.thin_slice.hold_released",
+  HOLD_ROLLBACK: "dispatch.thin_slice.hold_rollback",
+  CLOSEOUT_CANDIDATE_EMITTED: "dispatch.thin_slice.closeout_candidate_emitted",
+});
 const REQUIRED_STRING_FIELDS = {
   nonEmpty: (value) => typeof value === "string" && value.trim() !== "",
   stringOrNull: (value) => value == null || typeof value === "string",
@@ -165,6 +174,92 @@ function validatePayload(value) {
   return { ok: true };
 }
 
+function validatePolicyContext(value) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "policy_context must be an object" };
+  }
+  return { ok: true };
+}
+
+function validateRequestedWindow(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "requested_window must be an object" };
+  }
+  if (!REQUIRED_STRING_FIELDS.nonEmpty(value.start)) {
+    return { ok: false, reason: "requested_window.start is required" };
+  }
+  if (!REQUIRED_STRING_FIELDS.nonEmpty(value.end)) {
+    return { ok: false, reason: "requested_window.end is required" };
+  }
+  return { ok: true };
+}
+
+function validateThinSliceEventName(value) {
+  if (!REQUIRED_STRING_FIELDS.nonEmpty(value)) {
+    return { ok: false, reason: "envelope.event_name is required" };
+  }
+  const values = Object.values(THIN_SLICE_EVENTS);
+  if (!values.includes(value)) {
+    return { ok: false, reason: `envelope.event_name must be one of ${values.join(", ")}` };
+  }
+  return { ok: true };
+}
+
+function validateThinSliceTraceEnvelope(payload) {
+  const errors = collectValidationErrors([
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.correlation_id)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.correlation_id is required" },
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.causation_id)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.causation_id is required" },
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.idempotency_key)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.idempotency_key is required" },
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.ticket_id)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.ticket_id is required" },
+    () => validateDispatchActor(payload?.actor),
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.timestamp)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.timestamp is required" },
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.schema_version)
+        ? { ok: true }
+        : { ok: false, reason: "envelope.schema_version is required" },
+    () => validateThinSliceEventName(payload?.event_name),
+  ]);
+
+  const traceparent = trimOrNull(payload?.traceparent);
+  if (traceparent && !parseTraceParent(traceparent)) {
+    errors.push("envelope.traceparent must be a valid traceparent");
+  }
+
+  if (payload?.tracestate != null) {
+    if (!REQUIRED_STRING_FIELDS.stringOrNull(payload.tracestate)) {
+      errors.push("envelope.tracestate must be a string");
+    }
+  }
+  if (payload?.traceparent != null) {
+    if (!REQUIRED_STRING_FIELDS.stringOrNull(payload.traceparent)) {
+      errors.push("envelope.traceparent must be a string");
+    }
+  }
+  if (payload?.step_name != null && !REQUIRED_STRING_FIELDS.stringOrNull(payload.step_name)) {
+    errors.push("envelope.step_name must be a string");
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    value: errors.length === 0 ? payload : null,
+  };
+}
+
 function validateObjectUri(value) {
   if (!REQUIRED_STRING_FIELDS.nonEmpty(value)) {
     return { ok: false, reason: "object_uri is required" };
@@ -221,6 +316,44 @@ export function validateDispatchCommand(payload) {
     () => validateDispatchActor(payload?.actor),
     () => validatePayload(payload?.payload),
   ]);
+  return {
+    ok: errors.length === 0,
+    errors,
+    value: errors.length === 0 ? payload : null,
+  };
+}
+
+export function validateThinSliceWorkflowCommand(payload) {
+  const errors = collectValidationErrors([
+    () =>
+      REQUIRED_STRING_FIELDS.nonEmpty(payload?.ticket_id)
+        ? { ok: true }
+        : { ok: false, reason: "ticket_id is required" },
+    () => validatePolicyContext(payload?.policy_context),
+    () => validateRequestedWindow(payload?.requested_window),
+    () => {
+      const traceEnvelope = payload?.envelope;
+      if (!traceEnvelope || typeof traceEnvelope !== "object" || Array.isArray(traceEnvelope)) {
+        return { ok: false, reason: "envelope is required" };
+      }
+      return { ok: true };
+    },
+  ]);
+  const envelopeResult =
+    errors.length === 0 ? validateThinSliceTraceEnvelope(payload?.envelope) : null;
+  if (envelopeResult && !envelopeResult.ok) {
+    errors.push(...envelopeResult.errors);
+  }
+  const commandSchemaVersion = trimOrNull(payload?.envelope?.schema_version);
+  if (commandSchemaVersion && commandSchemaVersion !== THIN_SLICE_SCHEMA_VERSION) {
+    errors.push(`envelope.schema_version must be ${THIN_SLICE_SCHEMA_VERSION}`);
+  }
+  if (payload?.ticket_id != null && payload?.envelope?.ticket_id != null) {
+    if (payload.ticket_id !== payload.envelope.ticket_id) {
+      errors.push("ticket_id must match envelope.ticket_id");
+    }
+  }
+
   return {
     ok: errors.length === 0,
     errors,
@@ -458,4 +591,11 @@ export function serializeTraceContextForLog(traceContext) {
   };
 }
 
-export { COMMS_DIRECTIONS, DECISION_VALUES, REDACTION_STATES, RETENTION_CLASS_VALUES };
+export {
+  COMMS_DIRECTIONS,
+  DECISION_VALUES,
+  REDACTION_STATES,
+  RETENTION_CLASS_VALUES,
+  THIN_SLICE_EVENTS,
+  THIN_SLICE_SCHEMA_VERSION,
+};

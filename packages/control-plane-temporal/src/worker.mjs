@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readTicket, readTimeline } from "./activities.mjs";
+import { proposeHoldReleasePlan, readTicket, readTimeline } from "./activities.mjs";
 
 const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -99,11 +99,23 @@ async function startWithTemporal() {
   }
 
   const { NativeConnection, Worker } = temporal;
+  const normalizedMode = startMode === "shadow" ? "shadow" : "temporal";
+  const isShadowMode = normalizedMode === "shadow";
+  const activities = isShadowMode
+    ? {
+        readTicket,
+        readTimeline,
+        proposeHoldReleasePlan,
+      }
+    : {
+        readTicket,
+        readTimeline,
+      };
   writeLog("info", "worker.temporal.starting", {
     temporalAddress,
     namespace: temporalNamespace,
     taskQueue: temporalTaskQueue,
-    mode: "temporal",
+    mode: normalizedMode,
   });
 
   const connection = await NativeConnection.connect({
@@ -115,10 +127,7 @@ async function startWithTemporal() {
     namespace: temporalNamespace,
     taskQueue: temporalTaskQueue,
     workflowsPath: new URL("./workflows.mjs", import.meta.url).pathname,
-    activities: {
-      readTicket,
-      readTimeline,
-    },
+    activities,
   });
 
   writeLog("info", "worker.temporal.started", {
@@ -172,7 +181,7 @@ function initiateShutdown() {
 
 async function boot() {
   try {
-    if (startMode === "temporal") {
+    if (startMode === "temporal" || startMode === "shadow") {
       await startWithTemporal();
       return;
     }

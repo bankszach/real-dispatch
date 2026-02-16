@@ -1,5 +1,7 @@
 # MVP Launch Checkpoint (2026-02-14)
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 This document preserves the recovery path to reach the validated state where:
 
 - OpenClaw can call dispatch tools from chat
@@ -107,6 +109,39 @@ node --test --test-concurrency=1 dispatch/tests/*.mjs
 ```
 
 Record summary output and include in evidence packet.
+
+## 7) Shadow proposal demo (no mutations)
+
+This path shows a real bridge-created ticket entering schedule-confirmed state, then runs a pure proposal artifact for a hold/release control action.
+
+Command:
+
+```bash
+pnpm dispatch:demo:shadow
+```
+
+Expected output:
+
+- `ticket_id`
+- `current_state` set to `SCHEDULED`
+- `timeline_length_before` equals `timeline_length_after`
+- `proposal_artifact_path` (or similar) points to `dispatch/reports/shadow-proposals/<ticket_id>.json`
+
+Recommended verification:
+
+- Open the written JSON and confirm it includes:
+  - `ticket_id`
+  - `current_state`
+  - `timeline_length`
+  - `proposed_actions` for:
+    - `POST /tickets/{ticketId}/schedule/hold`
+    - `POST /tickets/{ticketId}/schedule/release`
+  - `safety.mutation_attempted` is `false`
+
+Note:
+
+- Do **not** use `pnpm -r test` as a dispatch readiness gate for this path.
+- For a full repo pass, use `pnpm dispatch:test:ci`.
 
 Bootstrap evidence packet:
 

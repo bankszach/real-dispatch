@@ -1,0 +1,51 @@
+{
+  "artifact_type": "dispatch-shadow-proposal",
+  "artifact_version": 1,
+  "generated_at": "2026-02-16T23:47:54.871Z",
+  "ticket_id": "fcdf24eb-f368-45c0-9389-99a51bf081e1",
+  "correlation_id": "db64ed06-eb04-4d85-ab20-d2f7154a9d19",
+  "trace_context": {
+    "trace_id": null,
+    "trace_parent": null,
+    "trace_state": null,
+    "trace_source": null
+  },
+  "current_state": "SCHEDULED",
+  "timeline_length": 4,
+  "proposed_actions": [
+    {
+      "endpoint": "/tickets/fcdf24eb-f368-45c0-9389-99a51bf081e1/schedule/hold",
+      "method": "POST",
+      "payload": {
+        "hold_reason": "CUSTOMER_PENDING",
+        "confirmation_window": {
+          "start": "2026-02-16T23:47:54.825Z",
+          "end": "2026-02-17T00:32:54.825Z"
+        }
+      }
+    },
+    {
+      "endpoint": "/tickets/fcdf24eb-f368-45c0-9389-99a51bf081e1/schedule/release",
+      "method": "POST",
+      "payload": {
+        "customer_confirmation_log": "{{hold_id}}"
+      }
+    }
+  ],
+  "safety": {
+    "mutation_attempted": false,
+    "mode": "proposal"
+  },
+  "decision": "PROPOSED",
+  "reason": "shadow_mode_no_side_effects",
+  "can_apply": false,
+  "fallback_plan": {
+    "suggested_confirmation_window_fallback": {
+      "hold_reason": "CUSTOMER_PENDING",
+      "confirmation_window": {
+        "start": "2026-02-16T23:57:54.871Z",
+        "end": "2026-02-17T00:47:54.871Z"
+      }
+    }
+  }
+}
