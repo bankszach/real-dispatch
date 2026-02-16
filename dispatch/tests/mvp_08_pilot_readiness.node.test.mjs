@@ -5,11 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
-import {
-  DispatchBridgeError,
-  isUuid,
-  invokeDispatchAction,
-} from "../tools-plugin/src/bridge.mjs";
+import { DispatchBridgeError, isUuid, invokeDispatchAction } from "../tools-plugin/src/bridge.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -69,7 +65,7 @@ function loadPilotTemplates(filePath) {
 }
 
 function stableSorted(values) {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function run(command, args, input = undefined) {
@@ -79,11 +75,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -127,12 +119,7 @@ function readJson(raw) {
 }
 
 function actorHeaders(params) {
-  const {
-    actorId,
-    actorRole,
-    toolName,
-    correlationId,
-  } = params;
+  const { actorId, actorRole, toolName, correlationId } = params;
 
   const headers = {
     "X-Actor-Id": actorId,
@@ -268,15 +255,7 @@ test.before(async () => {
   for (let i = 0; i < 30; i += 1) {
     const probe = spawnSync(
       "docker",
-      [
-        "exec",
-        postgresContainer,
-        "pg_isready",
-        "-U",
-        "dispatch",
-        "-d",
-        "dispatch",
-      ],
+      ["exec", postgresContainer, "pg_isready", "-U", "dispatch", "-d", "dispatch"],
       { encoding: "utf8" },
     );
     if (probe.status === 0) {
@@ -465,13 +444,13 @@ test("pilot UAT matrix executes dispatcher+technician lifecycle across top incid
 
     const requiredFromPacket = packetBefore.body.packet.evidence_requirements.required_evidence
       .map((entry) => entry.key)
-      .sort((left, right) => left.localeCompare(right));
+      .toSorted((left, right) => left.localeCompare(right));
     assert.deepEqual(requiredFromPacket, requiredEvidenceKeys);
 
     const closeoutItems = packetBefore.body.packet.checklist.required_items;
     const requiredChecklistFromPacket = closeoutItems
       .map((entry) => entry.key)
-      .sort((left, right) => left.localeCompare(right));
+      .toSorted((left, right) => left.localeCompare(right));
     assert.deepEqual(requiredChecklistFromPacket, requiredChecklistKeys);
 
     assert.equal(packetBefore.body.packet.closeout_gate.ready, false);
@@ -497,7 +476,10 @@ test("pilot UAT matrix executes dispatcher+technician lifecycle across top incid
         assert.equal(error.status, 409);
         assert.equal(error.code, "DISPATCH_API_ERROR");
         assert.equal(error.details.dispatch_error.error.code, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
-        assert.equal(error.details.dispatch_error.error.requirement_code, "MISSING_SIGNATURE_CONFIRMATION");
+        assert.equal(
+          error.details.dispatch_error.error.requirement_code,
+          "MISSING_SIGNATURE_CONFIRMATION",
+        );
         assert.deepEqual(error.details.dispatch_error.error.missing_evidence_keys, [
           "signature_or_no_signature_reason",
         ]);
@@ -506,7 +488,9 @@ test("pilot UAT matrix executes dispatcher+technician lifecycle across top incid
     );
 
     const evidenceEntries = [...requiredEvidenceKeys];
-    const noSignatureTemplatePath = requiredEvidenceKeys.includes("signature_or_no_signature_reason");
+    const noSignatureTemplatePath = requiredEvidenceKeys.includes(
+      "signature_or_no_signature_reason",
+    );
 
     const nonSignatureEvidence = evidenceEntries.filter(
       (entry) => entry !== "signature_or_no_signature_reason",
@@ -619,7 +603,9 @@ test("pilot UAT matrix executes dispatcher+technician lifecycle across top incid
     const queueRow = cockpit.body.queue.find((entry) => entry.ticket_id === ticketId);
     assert.ok(queueRow, `ticket ${ticketId} must be visible on cockpit queue`);
     assert.equal(queueRow.state, "INVOICED");
-    const openPacketAction = queueRow.actions.find((action) => action.action_id === "open_technician_packet");
+    const openPacketAction = queueRow.actions.find(
+      (action) => action.action_id === "open_technician_packet",
+    );
     assert.ok(openPacketAction);
     assert.equal(openPacketAction.enabled, true);
 
@@ -678,7 +664,9 @@ test("V0 launch gate evidence packet is published and references required contro
   assert.match(content, /GLZ-10|GLZ-11|GLZ-12/i);
   assert.match(content, /autonomy/);
   assert.match(content, /pilot readiness/i);
-  assert.match(content, /dispatch\\/tests\\/mvp_08_pilot_readiness\\.node\\.test\\.mjs/i);
-  assert.match(content, /dispatch\\/tests\\/story_glz_12_autonomy_rollout_controls\\.node\\.test\\.mjs/i);
-  assert.match(content, /dispatcher\\/technician lifecycle/i);
+  assert.ok(content.includes("dispatch/tests/mvp_08_pilot_readiness.node.test.mjs"));
+  assert.ok(
+    content.includes("dispatch/tests/story_glz_12_autonomy_rollout_controls.node.test.mjs"),
+  );
+  assert.ok(content.toLowerCase().includes("dispatcher/technician lifecycle"));
 });

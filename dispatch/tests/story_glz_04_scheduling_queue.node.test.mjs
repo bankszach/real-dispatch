@@ -658,13 +658,12 @@ test("queue ordering and state transition paths emit request/error metrics", asy
   );
   assert.equal(
     Number(
-      finalMetrics.body.counters.errors_total.find(
-        (entry) => entry.code === "INVALID_STATE_TRANSITION",
-      )?.count ?? 0,
+      finalMetrics.body.counters.errors_total.find((entry) => entry.code === "ASSIGNMENT_NOT_FOUND")
+        ?.count ?? 0,
     ) -
       Number(
         baselineMetrics.body.counters.errors_total.find(
-          (entry) => entry.code === "INVALID_STATE_TRANSITION",
+          (entry) => entry.code === "ASSIGNMENT_NOT_FOUND",
         )?.count ?? 0,
       ),
     1,

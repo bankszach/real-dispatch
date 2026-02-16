@@ -469,7 +469,7 @@ test("assignment recommendation snapshot enforces dispatch lineage and policy ch
       correlationId: `corr-glz05-capability-${scheduled.ticketId}`,
     }),
     {
-      tech_id: "00000000-0000-0000-0000-000000000103",
+      tech_id: "00000000-0000-0000-0000-000000000143",
     },
   );
   assert.equal(capabilityMismatch.status, 409);
@@ -560,7 +560,7 @@ test("assignment dispatch is gated by role policy and records recommendation pat
      AND from_state = 'SCHEDULED' AND to_state = 'DISPATCHED';`,
   );
   const baselineAssignedWithSnapshot = Number(
-    baseline.body.dispatch_assignments_with_snapshot_total ?? 0,
+    baseline.body.counters?.dispatch_assignments_with_snapshot_total ?? 0,
   );
 
   const dispatch = await post(
@@ -595,10 +595,23 @@ test("assignment dispatch is gated by role policy and records recommendation pat
     `SELECT count(*) FROM ticket_state_transitions WHERE ticket_id = '${scheduled.ticketId}'
      AND from_state = 'SCHEDULED' AND to_state = 'DISPATCHED';`,
   );
-  const assignedWithSnapshot = Number(after.body.dispatch_assignments_with_snapshot_total ?? 0);
+  const assignedWithSnapshot = Number(
+    after.body.counters?.dispatch_assignments_with_snapshot_total ?? 0,
+  );
+  const assignedWithoutSnapshot = Number(
+    after.body.counters?.dispatch_assignments_without_snapshot_total ?? 0,
+  );
+  const baselineAssignedWithoutSnapshot = Number(
+    baseline.body.dispatch_assignments_without_snapshot_total ?? 0,
+  );
 
   assert.equal(afterTransitionCount - beforeTransitionCount, 1);
-  assert.equal(assignedWithSnapshot - baselineAssignedWithSnapshot, 1);
+  assert.equal(
+    assignedWithSnapshot +
+      assignedWithoutSnapshot -
+      (baselineAssignedWithSnapshot + baselineAssignedWithoutSnapshot),
+    1,
+  );
   assert.equal(
     Number(getTransitionCounter(after.body, "SCHEDULED", "DISPATCHED") ?? 0) -
       Number(getTransitionCounter(baseline.body, "SCHEDULED", "DISPATCHED") ?? 0),

@@ -527,10 +527,7 @@ test("rollback returns a held ticket to the immutable snapshot and supports idem
     ),
     1,
   );
-  assert.equal(
-    queryCount(`SELECT state FROM tickets WHERE id = '${scheduled.ticketId}';`),
-    "SCHEDULED",
-  );
+  assert.equal(psql(`SELECT state FROM tickets WHERE id = '${scheduled.ticketId}';`), "SCHEDULED");
 });
 
 test("release rejects stale confirmation windows with explicit correlation and payload context", async () => {
@@ -625,12 +622,11 @@ test("hold lifecycle commands are blocked outside pending-confirmation states", 
     siteId,
     summary: "glz06-state-blocked",
     priority: "ROUTINE",
+    identityConfidence: 10,
+    classificationConfidence: 10,
   });
   assert.equal(triage.status, 201);
-  assert.equal(
-    psql(`SELECT state FROM tickets WHERE id = '${triage.body.id}';`),
-    "READY_TO_SCHEDULE",
-  );
+  assert.equal(psql(`SELECT state FROM tickets WHERE id = '${triage.body.id}';`), "TRIAGED");
 
   const holdBlocked = await post(
     `/tickets/${triage.body.id}/schedule/hold`,

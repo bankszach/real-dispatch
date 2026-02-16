@@ -1,9 +1,12 @@
 # MVP-08: Pilot UAT and Cutover Readiness
 
 ## Purpose
+
 Define the production cutover readiness gate for the v0 dispatch release. This runbook is intended for pilot start/stop windows and verifies that dispatcher/technician lifecycle paths are stable across top incident templates.
 
 ## Pilot UAT Matrix (Dispatcher + Technician)
+
+This document confirms the dispatcher/technician lifecycle across top incident templates.
 
 Run as part of the release freeze window and include at least one incident of each template listed below:
 
@@ -49,9 +52,11 @@ For each incident template above, UAT must confirm:
 ## Rollback Rehearsal
 
 ### Trigger
+
 Pilot cannot progress if any gate fails twice in the same runbook window.
 
 ### Steps
+
 1. Freeze new request intake.
 2. Record last known good commit and release candidate identifier.
 3. Repoint API consumers back to previous stable image/branch.

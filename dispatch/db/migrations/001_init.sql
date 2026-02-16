@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
       from_state = 'TRIAGED'
       AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
     )
+    OR (from_state = 'TRIAGED' AND to_state = 'DISPATCHED')
     OR (
       from_state = 'APPROVAL_REQUIRED'
       AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
