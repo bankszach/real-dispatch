@@ -140,3 +140,7 @@ OpenClaw remains the base; Real Dispatch product boundaries are now locked aroun
 ## License
 
 MIT (inherits upstream licensing unless otherwise noted).
+
+# OpenClaw probe
+
+openclaw
