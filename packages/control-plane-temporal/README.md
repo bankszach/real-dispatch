@@ -14,3 +14,13 @@ Environment:
 - `DISPATCH_TEMPORAL_HEARTBEAT_MS` (default: `5000`)
 - `DISPATCH_TEMPORAL_SHUTDOWN_MS` (default: `10000`)
 - `DISPATCH_TEMPORAL_WORKER_IDENTITY` (auto-generated if omitted)
+
+## Smoke lane
+
+Run the skeleton startup smoke lane locally:
+
+```bash
+node --input-type=module -e "import('./src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"
+```
+
+Expected output: `worker.skeleton.start` JSON log event.

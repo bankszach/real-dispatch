@@ -5,6 +5,7 @@
   "type": "module",
   "main": "./src/worker.mjs",
   "scripts": {
+    "smoke": "node --input-type=module -e \"import('./src/worker.mjs'); setTimeout(() => process.exit(0), 1800);\"",
     "start": "node src/worker.mjs"
   },
   "dependencies": {}
