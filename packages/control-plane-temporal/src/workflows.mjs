@@ -1,12 +1,41 @@
-import { proxyActivities } from "@temporalio/workflow";
+function createMissingActivityProxy(name) {
+  return () => {
+    throw new Error(`Temporal workflow runtime missing dependency for activity '${name}'`);
+  };
+}
 
-const { readTicket, readTimeline } = proxyActivities({
-  startToCloseTimeout: "1 minute",
-});
+let proxyActivities;
+try {
+  ({ proxyActivities } = await import("@temporalio/workflow"));
+} catch {
+  proxyActivities = null;
+}
 
-const { holdSchedule, releaseSchedule } = proxyActivities({
-  startToCloseTimeout: "1 minute",
-});
+const { readTicket, readTimeline } = proxyActivities
+  ? proxyActivities({
+      startToCloseTimeout: "1 minute",
+    })
+  : {
+      readTicket: createMissingActivityProxy("readTicket"),
+      readTimeline: createMissingActivityProxy("readTimeline"),
+    };
+
+const { holdSchedule, releaseSchedule } = proxyActivities
+  ? proxyActivities({
+      startToCloseTimeout: "1 minute",
+    })
+  : {
+      holdSchedule: createMissingActivityProxy("holdSchedule"),
+      releaseSchedule: createMissingActivityProxy("releaseSchedule"),
+    };
+
+const { proposeHoldReleasePlan } = proxyActivities
+  ? proxyActivities({
+      startToCloseTimeout: "1 minute",
+    })
+  : {
+      proposeHoldReleasePlan: createMissingActivityProxy("proposeHoldReleasePlan"),
+    };
 
 function formatError(message) {
   return new Error(message);
@@ -55,6 +84,35 @@ function normalizeHoldPayload(input) {
   };
 }
 
+function normalizeTraceContext(input = {}) {
+  const topLevelTraceId = typeof input.trace_id === "string" ? input.trace_id.trim() : "";
+  const topLevelTraceParent =
+    typeof input.trace_parent === "string" ? input.trace_parent.trim() : "";
+  const topLevelTraceState = typeof input.trace_state === "string" ? input.trace_state.trim() : "";
+  const context = toSafeObject(input.trace_context);
+  const safeContext = toSafeObject(context) || {};
+
+  return {
+    trace_id:
+      topLevelTraceId ||
+      (typeof safeContext.traceId === "string" ? safeContext.traceId.trim() : null),
+    trace_parent:
+      topLevelTraceParent ||
+      (typeof safeContext.traceParent === "string" ? safeContext.traceParent.trim() : null) ||
+      (typeof safeContext.traceparent === "string" ? safeContext.traceparent.trim() : null),
+    trace_state:
+      topLevelTraceState ||
+      (typeof safeContext.traceState === "string" ? safeContext.traceState.trim() : null) ||
+      (typeof safeContext.tracestate === "string" ? safeContext.tracestate.trim() : null),
+    trace_source:
+      typeof input.trace_source === "string"
+        ? input.trace_source.trim()
+        : typeof safeContext.source === "string"
+          ? safeContext.source.trim()
+          : null,
+  };
+}
+
 export async function runScheduleHoldReleaseWorkflow(input = {}, adapters = {}) {
   const ticketId = normalizeTicketId(input);
   if (ticketId === "") {
@@ -99,6 +157,59 @@ export async function runScheduleHoldReleaseWorkflow(input = {}, adapters = {}) 
   };
 }
 
+export async function runScheduleHoldReleaseShadowWorkflow(input = {}, adapters = {}) {
+  const ticketId = normalizeTicketId(input);
+  if (ticketId === "") {
+    throw formatError("ticketId is required");
+  }
+
+  const readTicketFn = adapters.readTicket;
+  const readTimelineFn = adapters.readTimeline;
+  const proposeHoldReleaseFn = adapters.proposeHoldReleasePlan;
+
+  if (typeof proposeHoldReleaseFn !== "function") {
+    throw formatError("proposeHoldReleasePlan activity is required");
+  }
+
+  if (typeof readTicketFn === "function") {
+    const ticketSnapshot = await readTicketFn(ticketId, {
+      traceContext: normalizeTraceContext(input),
+    });
+    if (!ticketSnapshot || typeof ticketSnapshot !== "object") {
+      throw formatError(`ticket ${ticketId} not found`);
+    }
+  }
+
+  const normalizedHold = normalizeHoldPayload(input);
+  const traceContext = normalizeTraceContext(input);
+  const proposal = await proposeHoldReleaseFn({
+    ticket_id: ticketId,
+    hold_reason: normalizedHold.hold_reason,
+    confirmation_window: normalizedHold.confirmation_window,
+    trace_context: traceContext,
+    action: "SCHEDULE_HOLD_RELEASE_SHADOW",
+    source: "workflow_shadow",
+  });
+
+  let timelineLength = 0;
+  if (typeof readTimelineFn === "function") {
+    const timeline = await readTimelineFn(ticketId, {
+      traceContext,
+    });
+    timelineLength = Array.isArray(timeline?.events) ? timeline.events.length : 0;
+  }
+
+  return {
+    mode: "shadow",
+    ticket_id: ticketId,
+    shadow_intent: "propose_only",
+    trace_context: traceContext,
+    proposal,
+    timeline_length: timelineLength,
+    can_apply: false,
+  };
+}
+
 export async function ticketReadbackWorkflow(input) {
   let ticketId = input?.ticketId;
   if (typeof ticketId !== "string" || ticketId.trim() === "") {
@@ -127,5 +238,13 @@ export async function scheduleHoldReleaseWorkflow(input) {
     readTimeline,
     holdSchedule,
     releaseSchedule,
+  });
+}
+
+export async function scheduleHoldReleaseShadowWorkflow(input) {
+  return runScheduleHoldReleaseShadowWorkflow(input, {
+    readTicket,
+    readTimeline,
+    proposeHoldReleasePlan,
   });
 }

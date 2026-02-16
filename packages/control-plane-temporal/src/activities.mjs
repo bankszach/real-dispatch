@@ -1,5 +1,47 @@
 const DEFAULT_DISPATCH_API_URL = "http://dispatch-api:8080";
 
+function sanitizeString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function toSafeObject(value) {
+  return value && typeof value === "object" ? value : null;
+}
+
+function normalizeTraceContext(context = {}) {
+  const traceContext = toSafeObject(context.trace_context) || {};
+
+  return {
+    trace_id: sanitizeString(context.trace_id) || sanitizeString(traceContext.traceId) || null,
+    trace_parent:
+      sanitizeString(context.trace_parent) ||
+      sanitizeString(traceContext.traceParent) ||
+      sanitizeString(traceContext.traceparent) ||
+      null,
+    trace_state:
+      sanitizeString(context.trace_state) ||
+      sanitizeString(traceContext.traceState) ||
+      sanitizeString(traceContext.tracestate) ||
+      null,
+    trace_source:
+      sanitizeString(context.trace_source) || sanitizeString(traceContext.source) || null,
+  };
+}
+
+function normalizeHoldInput(input = {}) {
+  return {
+    ticket_id: sanitizeString(input.ticket_id) || sanitizeString(input.ticketId),
+    hold_reason: sanitizeString(input.hold_reason),
+    confirmation_window: toSafeObject(input.confirmation_window) || {},
+    source: sanitizeString(input.source) || "workflow_shadow",
+    trace_context: normalizeTraceContext(input),
+  };
+}
+
 function parseJsonSafe(rawBody) {
   try {
     return JSON.parse(rawBody);
@@ -93,4 +135,33 @@ export async function readTimeline(ticketId, context = {}) {
     throw new Error("readTimeline requires ticketId");
   }
   return dispatchGet(`/tickets/${ticketId}/timeline`, context);
+}
+
+export async function proposeHoldReleasePlan(input = {}) {
+  const request = normalizeHoldInput(input);
+  if (!request.ticket_id) {
+    throw new Error("proposeHoldReleasePlan requires ticket_id");
+  }
+
+  const holdReason = request.hold_reason || "CUSTOMER_PENDING";
+  const windowStart = sanitizeString(request.confirmation_window.start);
+  const windowEnd = sanitizeString(request.confirmation_window.end);
+
+  return {
+    action: "SCHEDULE_HOLD_RELEASE_SHADOW",
+    mode: "shadow",
+    decision: "PROPOSED",
+    can_apply: false,
+    reason: "shadow_mode_no_side_effects",
+    ticket_id: request.ticket_id,
+    hold: {
+      hold_reason: holdReason,
+      confirmation_window: {
+        start: windowStart,
+        end: windowEnd,
+      },
+    },
+    trace_context: request.trace_context,
+    source: request.source,
+  };
 }

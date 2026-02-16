@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./src/worker.mjs",
   "scripts": {
-    "start": "node src/worker.mjs"
+    "demo:shadow": "node src/shadow-workflow-demo.mjs",
+    "start": "node src/worker.mjs",
+    "test": "node --test src/shadow-workflow.test.mjs"
   },
   "dependencies": {}
 }
