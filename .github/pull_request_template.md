@@ -7,6 +7,11 @@ Story ID: `E#-F#-S#`
 - Title must start with `E#-F#-S# <short verb phrase>`
 - Example: `E1-F1-S1 add contracts package`
 
+## Branch format
+
+- Source branch must be `codex/E#-F#-S#-<short-slug>`
+- Example: `codex/E1-F1-S1-contracts-trace-envelope`
+
 ## Acceptance evidence
 
 - Commands + exact output (or screenshots) proving acceptance criteria.
