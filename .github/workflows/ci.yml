@@ -316,6 +316,10 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Install Playwright browsers
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        run: pnpm exec playwright install --with-deps
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
@@ -528,6 +532,10 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Install Playwright browsers
+        if: matrix.task == 'test' && matrix.runtime == 'node'
+        run: pnpm exec playwright install
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
@@ -589,6 +597,9 @@ jobs:
           node -v
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install
 
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)

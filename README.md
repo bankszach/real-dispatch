@@ -96,6 +96,13 @@ pnpm check
 pnpm test
 ```
 
+## UI tests (Playwright)
+
+```bash
+pnpm exec playwright install
+pnpm -r test
+```
+
 Dispatch topology helpers:
 
 ```bash
