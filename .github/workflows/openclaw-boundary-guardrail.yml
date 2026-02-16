@@ -29,7 +29,7 @@ jobs:
 
           is_legacy_path() {
             case "$1" in
-              dispatch/logs/*|dispatch/logs/*/*|dispatch/logs/*/*/*|docs/archive/*|docs/archive/*/*|docs/archive/*/*/*|real-dispatch-agile-package/10-Appendix/*|real-dispatch-agile-package/10-Appendix/*/*)
+              dispatch/logs/*|docs/archive/*|real-dispatch-agile-package/10-Appendix/*)
                 return 0
                 ;;
               *)
@@ -58,3 +58,5 @@ jobs:
             echo "Allowed legacy paths: dispatch/logs/**, docs/archive/**, and real-dispatch-agile-package/10-Appendix/** only."
             exit 1
           fi
+
+          echo "OpenClaw boundary guardrail: OK"
