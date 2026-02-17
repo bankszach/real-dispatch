@@ -32,12 +32,237 @@ export default function register(api: {
     Type.Literal("SYSTEM"),
   ]);
   const actorRoleSchema = Type.String({ minLength: 1 });
-  const payloadSchema = Type.Object({}, { additionalProperties: true });
+  const uuidSchema = Type.String({ format: "uuid", minLength: 36, maxLength: 36 });
+  const isoDateTimeSchema = Type.String({ format: "date-time", minLength: 20 });
+  const nonNegativeNumberSchema = Type.Number({ minimum: 0 });
+  const prioritySchema = Type.Union([
+    Type.Literal("EMERGENCY"),
+    Type.Literal("URGENT"),
+    Type.Literal("ROUTINE"),
+  ]);
+  const confidencePercentSchema = Type.Number({ minimum: 0, maximum: 100 });
+  const schedulingWindowSchema = Type.Object(
+    {
+      start: isoDateTimeSchema,
+      end: isoDateTimeSchema,
+    },
+    { additionalProperties: true },
+  );
+  const checklistStatusSchema = Type.Object({}, { additionalProperties: true });
+  const locationSchema = Type.Object({}, { additionalProperties: true });
+  const metadataSchema = Type.Object({}, { additionalProperties: true });
+  const holdReasonSchema = Type.Union([
+    Type.Literal("CUSTOMER_PENDING"),
+    Type.Literal("CUSTOMER_UNREACHABLE"),
+    Type.Literal("CUSTOMER_CONFIRMATION_STALE"),
+  ]);
+  const resultSchema = Type.Union([Type.Literal("PASS"), Type.Literal("FAIL")]);
+  const evidenceDecisionSchema = Type.Union([Type.Literal("APPROVED"), Type.Literal("DENIED")]);
+  const dispatchModeSchema = Type.Union([
+    Type.Literal("STANDARD"),
+    Type.Literal("EMERGENCY_BYPASS"),
+  ]);
+  const approvalTypeSchema = Type.Union([Type.Literal("NTE_INCREASE"), Type.Literal("PROPOSAL")]);
+  const scheduleActionSchema = Type.Object(
+    {
+      hold_reason: holdReasonSchema,
+      confirmation_window: schedulingWindowSchema,
+    },
+    { additionalProperties: true },
+  );
+  const serviceTypeSchema = Type.String({ minLength: 1 });
+  const recommendationLimitSchema = Type.Integer({ minimum: 1, maximum: 20 });
+  const autonomyGlobalScopeSchema = Type.Object(
+    {
+      scope_type: Type.Optional(Type.Literal("GLOBAL")),
+      reason: Type.Optional(Type.String({ minLength: 1 })),
+    },
+    { additionalProperties: false },
+  );
+  const autonomyIncidentScopeSchema = Type.Object(
+    {
+      scope_type: Type.Literal("INCIDENT"),
+      incident_type: Type.String({ minLength: 1 }),
+      reason: Type.Optional(Type.String({ minLength: 1 })),
+    },
+    { additionalProperties: false },
+  );
+  const autonomyTicketScopeSchema = Type.Object(
+    {
+      scope_type: Type.Literal("TICKET"),
+      ticket_id: uuidSchema,
+      reason: Type.Optional(Type.String({ minLength: 1 })),
+    },
+    { additionalProperties: false },
+  );
+  const autonomyScopeSchema = Type.Union([
+    autonomyGlobalScopeSchema,
+    autonomyIncidentScopeSchema,
+    autonomyTicketScopeSchema,
+  ]);
+  const unknownPayloadSchema = Type.Object({}, { additionalProperties: true });
+  const payloadSchemas = {
+    "ticket.create": Type.Object(
+      {
+        account_id: uuidSchema,
+        site_id: uuidSchema,
+        summary: Type.String({ minLength: 1 }),
+        description: Type.Optional(Type.String({ minLength: 1 })),
+        asset_id: Type.Optional(uuidSchema),
+        nte_cents: Type.Optional(nonNegativeNumberSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "ticket.blind_intake": Type.Object(
+      {
+        account_id: uuidSchema,
+        site_id: uuidSchema,
+        summary: Type.String({ minLength: 1 }),
+        incident_type: Type.String({ minLength: 1 }),
+        customer_name: Type.String({ minLength: 1 }),
+        contact_phone: Type.Optional(Type.String({ minLength: 7 })),
+        contact_email: Type.Optional(Type.String({ format: "email" })),
+        priority: prioritySchema,
+        description: Type.Optional(Type.String({ minLength: 1 })),
+        nte_cents: Type.Optional(nonNegativeNumberSchema),
+        identity_confidence: confidencePercentSchema,
+        classification_confidence: confidencePercentSchema,
+        sop_handoff_acknowledged: Type.Optional(Type.Boolean()),
+        sop_handoff_prompt: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: true },
+    ),
+    "ticket.triage": Type.Object(
+      {
+        priority: prioritySchema,
+        incident_type: Type.String({ minLength: 1 }),
+        nte_cents: Type.Optional(nonNegativeNumberSchema),
+        workflow_outcome: Type.Optional(
+          Type.Union([
+            Type.Literal("TRIAGED"),
+            Type.Literal("READY_TO_SCHEDULE"),
+            Type.Literal("APPROVAL_REQUIRED"),
+          ]),
+        ),
+        ready_to_schedule: Type.Optional(Type.Boolean()),
+        requires_approval: Type.Optional(Type.Boolean()),
+        approval_reason: Type.Optional(Type.String({ minLength: 1 })),
+        approval_amount_delta_cents: Type.Optional(nonNegativeNumberSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "schedule.propose": Type.Object(
+      {
+        options: Type.Array(schedulingWindowSchema, { minItems: 1 }),
+      },
+      { additionalProperties: true },
+    ),
+    "schedule.confirm": Type.Object(
+      {
+        start: isoDateTimeSchema,
+        end: isoDateTimeSchema,
+      },
+      { additionalProperties: true },
+    ),
+    "assignment.dispatch": Type.Object(
+      {
+        tech_id: uuidSchema,
+        provider_id: Type.Optional(uuidSchema),
+        dispatch_mode: Type.Optional(dispatchModeSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "assignment.recommend": Type.Object(
+      {
+        service_type: serviceTypeSchema,
+        recommendation_limit: Type.Optional(recommendationLimitSchema),
+        preferred_window: Type.Optional(schedulingWindowSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "schedule.hold": scheduleActionSchema,
+    "schedule.release": Type.Object(
+      {
+        confirmation_id: uuidSchema,
+      },
+      { additionalProperties: true },
+    ),
+    "schedule.rollback": Type.Object(
+      {
+        confirmation_id: uuidSchema,
+        reason: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: true },
+    ),
+    "tech.check_in": Type.Object(
+      {
+        timestamp: isoDateTimeSchema,
+        location: Type.Optional(locationSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "tech.request_change": Type.Object(
+      {
+        approval_type: approvalTypeSchema,
+        reason: Type.String({ minLength: 1 }),
+        amount_delta_cents: Type.Optional(nonNegativeNumberSchema),
+        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: true },
+    ),
+    "approval.decide": Type.Object(
+      {
+        approval_id: uuidSchema,
+        decision: evidenceDecisionSchema,
+        notes: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: true },
+    ),
+    "closeout.add_evidence": Type.Object(
+      {
+        kind: Type.String({ minLength: 1 }),
+        uri: Type.String({ minLength: 1 }),
+        checksum: Type.Optional(Type.String({ minLength: 1 })),
+        evidence_key: Type.Optional(Type.String({ minLength: 1 })),
+        metadata: Type.Optional(metadataSchema),
+      },
+      { additionalProperties: true },
+    ),
+    "closeout.candidate": Type.Object(
+      {
+        checklist_status: checklistStatusSchema,
+        no_signature_reason: Type.Optional(Type.String({ minLength: 1 })),
+        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: true },
+    ),
+    "tech.complete": Type.Object(
+      {
+        checklist_status: checklistStatusSchema,
+        no_signature_reason: Type.Optional(Type.String({ minLength: 1 })),
+        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: true },
+    ),
+    "qa.verify": Type.Object(
+      {
+        timestamp: isoDateTimeSchema,
+        result: resultSchema,
+        notes: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: true },
+    ),
+    "billing.generate_invoice": Type.Object({}, { additionalProperties: true }),
+    "ops.autonomy.pause": autonomyScopeSchema,
+    "ops.autonomy.rollback": autonomyScopeSchema,
+    "ops.autonomy.state": Type.Object({}, { additionalProperties: true }),
+    "ops.autonomy.replay": Type.Object({}, { additionalProperties: true }),
+  } as const;
   const commonEnvelopeFields = {
     actor_id: Type.String({ minLength: 1 }),
     actor_role: Type.Optional(actorRoleSchema),
     actor_type: Type.Optional(actorTypeSchema),
-    request_id: Type.Optional(Type.String({ minLength: 1 })),
+    request_id: Type.Optional(Type.String({ format: "uuid" })),
     correlation_id: Type.Optional(Type.String({ minLength: 1 })),
     trace_id: Type.Optional(Type.String({ minLength: 1 })),
     trace_parent: Type.Optional(Type.String({ minLength: 1 })),
@@ -67,13 +292,17 @@ export default function register(api: {
       "Read technician packet, timeline, evidence, and closeout gate status via dispatch-api.",
   } as const;
 
-  const buildToolParameters = (policy: { mutating: boolean; requires_ticket_id: boolean }) => {
+  const buildToolParameters = (
+    policy: { mutating: boolean; requires_ticket_id: boolean },
+    toolName: string,
+  ) => {
     const properties: Record<string, unknown> = { ...commonEnvelopeFields };
     if (policy.requires_ticket_id) {
-      properties.ticket_id = Type.String({ minLength: 1 });
+      properties.ticket_id = uuidSchema;
     }
     if (policy.mutating) {
-      properties.payload = payloadSchema;
+      properties.payload =
+        payloadSchemas[toolName as keyof typeof payloadSchemas] ?? unknownPayloadSchema;
     }
     return Type.Object(properties, { additionalProperties: false });
   };
@@ -96,7 +325,7 @@ export default function register(api: {
           description:
             toolDescriptions[policy.tool_name as keyof typeof toolDescriptions] ??
             `Invoke ${policy.tool_name} via dispatch-api.`,
-          parameters: buildToolParameters(policy),
+          parameters: buildToolParameters(policy, policy.tool_name),
         }) as ToolDefinition,
     )
     .toSorted((left, right) => left.name.localeCompare(right.name));
