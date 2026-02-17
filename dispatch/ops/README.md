@@ -57,8 +57,44 @@ Use this sequence whenever you want to recover to the currently validated, dispa
 3. Open chat UI:
    - `pnpm openclaw dashboard`
 4. Validate chat/tool availability (in chat):
-   - `dispatch_contract_status`
-   - `dispatcher_cockpit` (canonical alias: `dispatcher.cockpit`)
+
+- `dispatch_contract_status`
+- `dispatcher_cockpit` (canonical alias: `dispatcher.cockpit`)
+
+## Using it from the OpenClaw UI chat interface
+
+The chat tool names are exposed as:
+
+- `dispatch_contract_status`
+- `dispatcher_cockpit` (canonical OpenClaw tool name; alias is `dispatcher.cockpit`)
+- `tech_job_packet` (canonical OpenClaw tool name; alias is `tech.job_packet`)
+- `ticket_create`, `ticket_triage`, `schedule_propose`, `schedule_confirm`
+- `assignment_dispatch`, `tech_check_in`, `closeout_add_evidence`, `tech_complete`
+- `qa_verify`, `billing_generate_invoice`
+- `ticket_get`, `ticket_timeline`, `closeout_list_evidence`
+
+From the Chat UI:
+
+- Open with `pnpm openclaw dashboard`
+- Confirm plugin availability:
+  - `dispatch_contract_status`
+- Start the dispatcher flow:
+  - `ticket_create` with `actor_role: dispatcher` and a payload including `account_id` + `site_id`
+  - `ticket_triage` with `priority` + `incident_type`
+  - `schedule_propose` then `schedule_confirm`
+  - `assignment_dispatch` with `tech_id`
+  - `dispatcher_cockpit` to confirm queue visibility
+  - `tech_check_in` with `location`
+  - `closeout_add_evidence` until required keys exist
+  - `tech_complete` -> `qa_verify` -> `billing_generate_invoice`
+  - `ticket_timeline` / `closeout_list_evidence` to inspect outcomes
+
+Note:
+
+- In this repo, UI tool discovery and invocation are underscore style (`ticket_create`), while API docs use dot style (`ticket.create`).
+- Keep a valid actor role on each command (`dispatcher`, `tech`, `qa`, `finance`) and stable ids (`request_id` for retries).
+- If `dispatch_contract_status` is not visible, restart gateway with:
+  - `pnpm openclaw gateway restart`
 
 If you want to verify end-to-end work path from chat, use:
 

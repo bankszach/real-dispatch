@@ -110,10 +110,15 @@ async function downStack(env) {
 
 async function upStack(env) {
   mkdirSync(path.join(rootDir, ".openclaw/workspace"), { recursive: true });
-  runCommand("pnpm", ["dispatch:stack:up"], {
-    cwd: rootDir,
-    env,
-  });
+  const composePath = path.join(stackComposeDir, "docker-compose.dispatch.yml");
+  runCommand(
+    "docker",
+    ["compose", "--env-file", ".env", "-f", composePath, "up", "-d", "--build"],
+    {
+      cwd: rootDir,
+      env,
+    },
+  );
 }
 
 async function bootstrapStack(env) {

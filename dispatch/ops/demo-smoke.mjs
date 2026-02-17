@@ -10,7 +10,7 @@ const DISPATCH_API_URL =
 const DEMO_ACCOUNT_ID =
   process.env.DISPATCH_DEMO_ACCOUNT_ID || "d3f77db0-5d1a-4f9c-b0ea-111111111111";
 const DEMO_SITE_ID = process.env.DISPATCH_DEMO_SITE_ID || "7f6a2b2c-8f1e-4f2b-b3a1-222222222222";
-const DEMO_TECH_ID = process.env.DISPATCH_DEMO_TECH_ID || "4a0f1f70-98d0-4b39-bf5f-111111111111";
+const DEMO_TECH_ID = process.env.DISPATCH_DEMO_TECH_ID || "00000000-0000-0000-0000-000000000083";
 
 const CORRELATION_ID = process.env.DISPATCH_DEMO_CORRELATION_ID || randomUUID();
 
@@ -124,9 +124,43 @@ async function main() {
       priority: "EMERGENCY",
       incident_type: "CANNOT_SECURE_ENTRY",
       nte_cents: 88000,
+      ready_to_schedule: true,
     },
   });
   assert.equal(triage.status, 200);
+  assert.equal(triage.data.state, "READY_TO_SCHEDULE");
+
+  const schedulePropose = await runToolAction({
+    toolName: "schedule.propose",
+    actorId: "dispatcher-demo",
+    actorRole: "dispatcher",
+    ticketId,
+    requestId: process.env.DISPATCH_DEMO_SCHEDULE_PROPOSE_REQUEST_ID || nextRequestId(),
+    payload: {
+      options: [
+        {
+          start: "2026-02-17T16:00:00.000Z",
+          end: "2026-02-17T17:00:00.000Z",
+        },
+      ],
+    },
+  });
+  assert.equal(schedulePropose.status, 200);
+  assert.equal(schedulePropose.data.state, "SCHEDULE_PROPOSED");
+
+  const scheduleConfirm = await runToolAction({
+    toolName: "schedule.confirm",
+    actorId: "dispatcher-demo",
+    actorRole: "dispatcher",
+    ticketId,
+    requestId: process.env.DISPATCH_DEMO_SCHEDULE_CONFIRM_REQUEST_ID || nextRequestId(),
+    payload: {
+      start: "2026-02-17T16:00:00.000Z",
+      end: "2026-02-17T17:00:00.000Z",
+    },
+  });
+  assert.equal(scheduleConfirm.status, 200);
+  assert.equal(scheduleConfirm.data.state, "SCHEDULED");
 
   const assign = await runToolAction({
     toolName: "assignment.dispatch",
