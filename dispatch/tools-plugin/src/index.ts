@@ -1,5 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { DISPATCH_TOOL_POLICIES } from "../../shared/authorization-policy.mjs";
+import {
+  DISPATCH_CANONICAL_ROLES,
+  DISPATCH_ROLE_ALIASES,
+} from "../../shared/authorization-policy.mjs";
 import { DispatchBridgeError, invokeDispatchAction } from "./bridge.mjs";
 
 /**
@@ -31,7 +35,10 @@ export default function register(api: {
     Type.Literal("SERVICE"),
     Type.Literal("SYSTEM"),
   ]);
-  const actorRoleSchema = Type.String({ minLength: 1 });
+  const actorRoleLiterals = Array.from(
+    new Set([...Object.values(DISPATCH_CANONICAL_ROLES), ...Object.keys(DISPATCH_ROLE_ALIASES)]),
+  );
+  const actorRoleSchema = Type.Union(actorRoleLiterals.map((role) => Type.Literal(role)));
   const uuidSchema = Type.String({ format: "uuid", minLength: 36, maxLength: 36 });
   const isoDateTimeSchema = Type.String({ format: "date-time", minLength: 20 });
   const nonNegativeNumberSchema = Type.Number({ minimum: 0 });
@@ -169,6 +176,8 @@ export default function register(api: {
         tech_id: uuidSchema,
         provider_id: Type.Optional(uuidSchema),
         dispatch_mode: Type.Optional(dispatchModeSchema),
+        dispatch_rationale: Type.Optional(Type.String({ minLength: 1 })),
+        dispatch_confirmation: Type.Optional(Type.Boolean()),
       },
       { additionalProperties: true },
     ),
@@ -317,6 +326,7 @@ export default function register(api: {
   };
 
   const toolDefinitions = Object.values(DISPATCH_TOOL_POLICIES)
+    .filter((policy) => policy.tool_name !== "assignment.recommend")
     .map(
       (policy) =>
         ({
@@ -416,7 +426,7 @@ export default function register(api: {
         async execute(_id: string, params: Record<string, unknown>) {
           try {
             const actorId = readString(params, "actor_id");
-            const actorRole = readString(params, "actor_role") ?? "dispatcher";
+            const actorRole = readString(params, "actor_role");
             const result = await invokeDispatchAction({
               baseUrl,
               token,

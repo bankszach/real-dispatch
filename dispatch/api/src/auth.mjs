@@ -1,15 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  normalizeDispatchRole,
   getCommandEndpointPolicy,
   getDispatchToolPolicy,
 } from "../../shared/authorization-policy.mjs";
 import { HttpError, isUuid, lowerHeader, requireHeader } from "./http-utils.mjs";
 
 const ACTOR_TYPES = new Set(["HUMAN", "AGENT", "SERVICE", "SYSTEM"]);
-const ACTOR_ROLE_ALIASES = {
-  assistant: "dispatcher",
-  bot: "dispatcher",
-};
 
 const READ_ENDPOINT_TOOL_NAMES = Object.freeze({
   "/tickets/{ticketId}": "ticket.get",
@@ -149,11 +146,14 @@ function normalizeActorType(value, sourceLabel, fallbackType) {
 }
 
 function normalizeRole(value, sourceLabel) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new HttpError(401, "INVALID_AUTH_CLAIMS", `${sourceLabel} is required`);
+  try {
+    return normalizeDispatchRole(value, sourceLabel);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new HttpError(401, "INVALID_AUTH_CLAIMS", error.message);
+    }
+    throw new HttpError(401, "INVALID_AUTH_CLAIMS", `${sourceLabel} is invalid`);
   }
-  const normalized = value.trim().toLowerCase();
-  return ACTOR_ROLE_ALIASES[normalized] ?? normalized;
 }
 
 function normalizeActorId(value, sourceLabel) {

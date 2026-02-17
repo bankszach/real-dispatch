@@ -87,9 +87,11 @@ const RECOMMENDATION_MATCH_WEIGHT = Object.freeze({
   OPEN_LOAD: 10,
   QUALITY: 1,
 });
-const RECOMMENDATION_MATCH_FALLBACK_TECH_ID = "ff0d8f58-0000-4000-8000-000000000001";
 const RECOMMENDATION_DEFAULT_LIMIT = 5;
 const RECOMMENDATION_MAX_LIMIT = 20;
+const RECOMMENDATION_ALLOWED_MODES = Object.freeze(["STANDARD", "EMERGENCY_BYPASS"]);
+const RECOMMENDATION_ALLOWED_MODES_SET = Object.freeze(new Set(RECOMMENDATION_ALLOWED_MODES));
+const DISPATCH_BYPASS_PRIORITY_THRESHOLD = Object.freeze(new Set(["EMERGENCY"]));
 const TECHNICIAN_DIRECTORY = Object.freeze([
   {
     tech_id: "00000000-0000-0000-0000-000000000083",
@@ -277,6 +279,9 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   ASSIGNMENT_CAPABILITY_MISMATCH: "assignment",
   ASSIGNMENT_ZONE_MISMATCH: "assignment",
   TECH_UNAVAILABLE: "assignment",
+  ASSIGNMENT_BYPASS_DENIED: "policy",
+  ASSIGNMENT_RECOMMENDATION_UNAVAILABLE: "assignment",
+  ASSIGNMENT_RECOMMENDATION_CONTEXT_MISSING: "assignment",
   ASSIGNMENT_RECOMMENDATION_MISMATCH: "assignment",
   QUEUE_PRIORITY_UNRESOLVABLE: "queue",
   SLA_CALCULATION_ERROR: "sla",
@@ -291,7 +296,6 @@ const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "schedule_propose", tool_name: "schedule.propose" }),
   Object.freeze({ action_id: "schedule_confirm", tool_name: "schedule.confirm" }),
   Object.freeze({ action_id: "dispatch_assignment", tool_name: "assignment.dispatch" }),
-  Object.freeze({ action_id: "recommend_technicians", tool_name: "assignment.recommend" }),
   Object.freeze({ action_id: "hold_schedule", tool_name: "schedule.hold" }),
   Object.freeze({ action_id: "release_schedule", tool_name: "schedule.release" }),
   Object.freeze({ action_id: "rollback_schedule", tool_name: "schedule.rollback" }),
@@ -323,6 +327,79 @@ const CLOSEOUT_CANDIDATE_HIGH_RISK_EVIDENCE_KEYS = Object.freeze([
   "note_risk_mitigation_and_customer_handoff",
   "note_safety_actions_and_follow_up_scope",
 ]);
+const AUDIT_PAYLOAD_ALLOWED_KEYS = Object.freeze([
+  "endpoint",
+  "requested_at",
+  "request",
+  "workflow_outcome",
+  "derived_transitions",
+  "state_recommendation",
+  "readiness",
+  "identity_signature",
+  "error_code",
+  "duplicate_window_minutes",
+  "duplicate_ticket_id",
+  "duplicate_ticket_state",
+  "duplicate_created_at",
+  "policy",
+  "sop_handoff_required",
+  "sop_handoff_acknowledged",
+  "recommendation_limit",
+  "recommendation_snapshot_id",
+  "candidate_count",
+  "service_type",
+  "preferred_window",
+  "approvals",
+  "approval_id",
+  "approval_status",
+  "approval_reason",
+  "amount_delta_cents",
+  "decision",
+  "target_state",
+  "notes",
+  "check_in_timestamp",
+  "hold_reason",
+  "confirmation_window",
+  "hold_snapshot_id",
+  "hold_sequence_id",
+  "reason",
+  "restored_state",
+  "current_is_paused",
+  "previous_is_paused",
+  "control_state_id",
+  "control_history_id",
+  "scope",
+  "options",
+  "selected_window_hint",
+  "selected_service_type",
+  "dispatch_validation",
+  "risk_profile",
+  "evidence_scope",
+  "closeout_check",
+  "verification_closeout_check",
+  "verification_result",
+  "verification_evidence_refs",
+  "verified_at",
+  "invoice_generated",
+  "evidence_item_id",
+  "no_signature_reason",
+  "evidence_refs",
+  "persisted_evidence_count",
+]);
+const AUDIT_PAYLOAD_SENSITIVE_FIELD_KEYWORDS = Object.freeze([
+  "phone",
+  "email",
+  "access_code",
+  "password",
+  "token",
+  "secret",
+  "ssn",
+  "dob",
+]);
+const AUDIT_PAYLOAD_ALLOWED_KEYS_SET = Object.freeze(new Set(AUDIT_PAYLOAD_ALLOWED_KEYS));
+const AUDIT_PAYLOAD_SENSITIVE_FIELD_KEYWORDS_SET = Object.freeze(
+  AUDIT_PAYLOAD_SENSITIVE_FIELD_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+);
 
 function normalizeOptionalFilePath(value) {
   if (typeof value !== "string") {
@@ -1327,6 +1404,83 @@ function parseIdempotencyKey(headers) {
   return requestId.trim();
 }
 
+function buildLogSafeAuditPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+
+  const safePayload = {};
+  for (const key of AUDIT_PAYLOAD_ALLOWED_KEYS) {
+    if (!Object.hasOwn(payload, key)) {
+      continue;
+    }
+    safePayload[key] = sanitizeAuditPayloadValue(payload[key], key);
+  }
+  return safePayload;
+}
+
+function sanitizeAuditPayloadValue(value, fieldName) {
+  if (value == null) {
+    return value;
+  }
+
+  const sensitiveField = isSensitiveAuditField(fieldName);
+  if (sensitiveField) {
+    return tokenizeAuditValue(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeAuditPayloadValue(entry, fieldName));
+  }
+
+  if (isPlainObject(value)) {
+    return sanitizeAuditPayloadObject(value);
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return value;
+}
+
+function sanitizeAuditPayloadObject(obj) {
+  if (!isPlainObject(obj)) {
+    return obj;
+  }
+
+  const safeObject = {};
+  for (const [key, nestedValue] of Object.entries(obj)) {
+    safeObject[key] = sanitizeAuditPayloadValue(nestedValue, key);
+  }
+  return safeObject;
+}
+
+function isSensitiveAuditField(fieldName) {
+  const normalizedField = String(fieldName).toLowerCase();
+  for (const keyword of AUDIT_PAYLOAD_SENSITIVE_FIELD_KEYWORDS_SET) {
+    if (normalizedField.includes(keyword)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPlainObject(value) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function tokenizeAuditValue(value) {
+  try {
+    return `redacted:${canonicalJsonHash(value)}`;
+  } catch {
+    return "redacted";
+  }
+}
+
 async function insertAuditEvent(client, params) {
   const {
     ticketId,
@@ -1341,6 +1495,7 @@ async function insertAuditEvent(client, params) {
     traceId,
     payload,
   } = params;
+  const safePayload = buildLogSafeAuditPayload(payload ?? {});
 
   const auditResult = await client.query(
     `
@@ -1350,11 +1505,11 @@ async function insertAuditEvent(client, params) {
         actor_id,
         actor_role,
         tool_name,
-        request_id,
-        correlation_id,
-        trace_id,
-        before_state,
-        after_state,
+      request_id,
+      correlation_id,
+      trace_id,
+      before_state,
+      after_state,
         payload
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -1371,7 +1526,7 @@ async function insertAuditEvent(client, params) {
       traceId,
       beforeState,
       afterState,
-      payload,
+      safePayload,
     ],
   );
 
@@ -1557,6 +1712,7 @@ function assertCommandStateAllowed(endpoint, fromState, body) {
   if (Array.isArray(allowedFromStates) && !allowedFromStates.includes(fromState)) {
     throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
       from_state: fromState,
+      allowed_from_states: allowedFromStates,
       to_state: policy.expected_to_state,
     });
   }
@@ -2778,6 +2934,32 @@ function normalizeOptionalString(value, fieldName) {
   return value.trim();
 }
 
+function parseDispatchMode(value) {
+  const normalized = normalizeOptionalString(value, "dispatch_mode");
+  if (normalized == null) {
+    return null;
+  }
+  const normalizedMode = normalized.toUpperCase();
+  if (!RECOMMENDATION_ALLOWED_MODES_SET.has(normalizedMode)) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      `Field 'dispatch_mode' must be one of: ${RECOMMENDATION_ALLOWED_MODES.join(", ")}`,
+    );
+  }
+  return normalizedMode;
+}
+
+function parseDispatchConfirmation(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "boolean") {
+    throw new HttpError(400, "INVALID_REQUEST", "Field 'dispatch_confirmation' must be a boolean");
+  }
+  return value;
+}
+
 function normalizeOptionalStringArray(value, fieldName) {
   if (value == null) {
     return [];
@@ -3615,13 +3797,15 @@ async function triageTicketMutation(client, context) {
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/triage", existing.state, body);
   if (targetState === existing.state && targetState === "TRIAGED") {
+    const policy = getCommandEndpointPolicy("/tickets/{ticketId}/triage");
     throw new HttpError(
       409,
       "INVALID_STATE_TRANSITION",
       "Ticket is already triaged and no state transition was requested",
       {
         from_state: existing.state,
-        to_state: targetState,
+        allowed_from_states: policy?.allowed_from_states ?? null,
+        to_state: policy?.expected_to_state ?? targetState,
       },
     );
   }
@@ -3896,6 +4080,98 @@ async function confirmScheduleMutation(client, context) {
   };
 }
 
+async function assertEmergencyBypassPreconditions(client, params) {
+  const { ticket, dispatchMode, dispatchRationale, dispatchConfirmation, correlationId } = params;
+
+  if (dispatchMode !== "EMERGENCY_BYPASS") {
+    return;
+  }
+
+  if (!dispatchRationale) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "dispatch_mode 'EMERGENCY_BYPASS' requires a dispatch_rationale",
+      {
+        dispatch_mode: dispatchMode,
+        dispatch_confirmation: dispatchConfirmation,
+        required_confirmation: true,
+        required_dispatch_rationale: true,
+        required_priority_threshold: Array.from(DISPATCH_BYPASS_PRIORITY_THRESHOLD),
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  if (!dispatchConfirmation) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "dispatch_mode 'EMERGENCY_BYPASS' requires explicit dispatch_confirmation",
+      {
+        dispatch_mode: dispatchMode,
+        dispatch_rationale,
+        required_confirmation: true,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  if (!DISPATCH_BYPASS_PRIORITY_THRESHOLD.has(ticket.priority)) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "Emergency bypass is only allowed for eligible priorities",
+      {
+        dispatch_mode: dispatchMode,
+        priority: ticket.priority,
+        allowed_priorities: Array.from(DISPATCH_BYPASS_PRIORITY_THRESHOLD),
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const incidentType =
+    typeof ticket.incident_type === "string" && ticket.incident_type.trim() !== ""
+      ? ticket.incident_type.trim().toUpperCase()
+      : null;
+  if (!incidentType) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "Emergency bypass requires an incident type",
+      {
+        dispatch_mode: dispatchMode,
+        correlation_id: correlationId,
+      },
+    );
+  }
+
+  const pendingApprovals = await client.query(
+    `
+      SELECT 1
+      FROM approvals
+      WHERE ticket_id = $1
+        AND status = 'PENDING'
+      LIMIT 1
+    `,
+    [ticket.id],
+  );
+  if (pendingApprovals.rowCount > 0) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "Emergency bypass is blocked while ticket has pending approvals",
+      {
+        dispatch_mode: dispatchMode,
+        incident_type: incidentType,
+        open_approvals: pendingApprovals.rowCount,
+        correlation_id: correlationId,
+      },
+    );
+  }
+}
+
 async function dispatchAssignmentMutation(client, context) {
   const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
     context;
@@ -3908,21 +4184,39 @@ async function dispatchAssignmentMutation(client, context) {
     body.recommendation_snapshot_id,
     "recommendation_snapshot_id",
   );
+  const dispatchMode = parseDispatchMode(body.dispatch_mode);
+  const dispatchRationale = normalizeOptionalString(body.dispatch_rationale, "dispatch_rationale");
+  const dispatchConfirmation = parseDispatchConfirmation(body.dispatch_confirmation);
 
   const existing = await getTicketWithSiteForUpdate(client, ticketId);
-  const dispatchMode =
-    body.dispatch_mode != null
-      ? normalizeOptionalString(body.dispatch_mode, "dispatch_mode")
-      : null;
-  const normalizedDispatchMode = dispatchMode == null ? null : dispatchMode.trim().toUpperCase();
-  const allowTriagedDispatch =
-    existing.state === "TRIAGED" &&
-    (normalizedDispatchMode === "STANDARD" || normalizedDispatchMode === "EMERGENCY_BYPASS");
   assertTicketScope(authRuntime, actor, existing);
-  if (!allowTriagedDispatch) {
+
+  if (existing.state === "TRIAGED" && dispatchMode == null) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      "dispatch_mode is required when dispatching from TRIAGED",
+      {
+        from_state: existing.state,
+        to_state: "DISPATCHED",
+        allowed_dispatch_modes: RECOMMENDATION_ALLOWED_MODES,
+      },
+    );
+  }
+
+  if (existing.state !== "TRIAGED") {
     assertCommandStateAllowed("/tickets/{ticketId}/assignment/dispatch", existing.state, body);
-  } else {
-    // TRIAGED dispatch is allowed only with explicit dispatch mode.
+  }
+  await assertEmergencyBypassPreconditions(client, {
+    ticket: existing,
+    dispatchMode,
+    dispatchRationale,
+    dispatchConfirmation,
+    correlationId,
+  });
+
+  if (existing.state === "TRIAGED" && dispatchMode === "STANDARD") {
+    // TRIAGED dispatch remains explicit and logged as non-bypass dispatch.
   }
 
   const recommendedSnapshot = recommendationSnapshotId
@@ -4051,6 +4345,12 @@ async function dispatchAssignmentMutation(client, context) {
         recommendation_snapshot_id: recommendationSnapshotId,
         matched_capability: true,
         matched_zone: true,
+        bypass_used: dispatchMode === "EMERGENCY_BYPASS",
+        bypass_mode: dispatchMode,
+        dispatch_confirmation: dispatchMode === "EMERGENCY_BYPASS" ? dispatchConfirmation : null,
+        ...(dispatchMode === "EMERGENCY_BYPASS" && dispatchRationale != null
+          ? { dispatch_rationale: dispatchRationale }
+          : {}),
       },
     },
   });
@@ -4074,21 +4374,43 @@ async function assignmentRecommendMutation(client, context) {
   const existing = await getTicketWithSiteForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/assignment/recommend", existing.state, body);
+  if (existing.scheduled_start == null || existing.scheduled_end == null) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_RECOMMENDATION_CONTEXT_MISSING",
+      "Cannot generate recommendations before schedule context is available",
+      {
+        ticket_state: existing.state,
+        site_region: existing.site_region,
+        correlation_id: correlationId,
+      },
+    );
+  }
 
   const rankedCandidates = buildTechnicianRecommendationCandidates({
     ticketRegion: existing.site_region,
     requestedServiceType: serviceType,
     limit: recommendationLimit,
   });
+  if (rankedCandidates.length === 0) {
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_RECOMMENDATION_UNAVAILABLE",
+      "No eligible technicians found for recommendation",
+      {
+        ticket_state: existing.state,
+        site_region: existing.site_region,
+        service_type: serviceType,
+        recommendation_limit: recommendationLimit,
+      },
+    );
+  }
 
   const evaluatedCandidates = rankedCandidates.map((candidate) => ({
     ...candidate,
     distance_bucket: candidate.zone_match ? 0 : 1,
   }));
-  const topRecommendation = evaluatedCandidates[0];
-  const recommendedTechId = topRecommendation
-    ? topRecommendation.tech_id
-    : RECOMMENDATION_MATCH_FALLBACK_TECH_ID;
+  const recommendedTechId = evaluatedCandidates[0].tech_id;
   const evaluatedAt = nowIso();
 
   const snapshot = await client.query(

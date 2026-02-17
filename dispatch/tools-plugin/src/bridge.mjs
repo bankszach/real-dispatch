@@ -2,15 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   DISPATCH_TOOL_POLICIES,
   getDispatchToolPolicy,
+  normalizeDispatchRole,
 } from "../../shared/authorization-policy.mjs";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACTOR_TYPES = new Set(["HUMAN", "AGENT", "SERVICE", "SYSTEM"]);
 const DEFAULT_TIMEOUT_MS = 10_000;
-const ACTOR_ROLE_ALIASES = {
-  assistant: "dispatcher",
-  bot: "dispatcher",
-};
 
 export const TOOL_SPECS = DISPATCH_TOOL_POLICIES;
 
@@ -50,6 +47,18 @@ function readNonEmptyString(value, fieldName) {
     throw new DispatchBridgeError(400, "INVALID_REQUEST", `Field '${fieldName}' is required`);
   }
   return value.trim();
+}
+
+function normalizeActorRole(value, sourceLabel) {
+  const normalized = readNonEmptyString(value, sourceLabel);
+  try {
+    return normalizeDispatchRole(normalized, sourceLabel);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new DispatchBridgeError(400, "INVALID_REQUEST", error.message);
+    }
+    throw new DispatchBridgeError(400, "INVALID_REQUEST", `Field '${sourceLabel}' is invalid`);
+  }
 }
 
 function normalizeActorType(value) {
@@ -141,9 +150,19 @@ function resolveTicketId(spec, ticketId) {
   return normalized;
 }
 
-function resolveActorRole(spec, actorRole) {
-  const normalized = readNonEmptyString(actorRole, "actor_role").toLowerCase();
-  const mapped = ACTOR_ROLE_ALIASES[normalized] ?? normalized;
+function resolveActorRole(spec, actorRole, { hasAuthenticatedRole = false } = {}) {
+  if (actorRole == null || actorRole === "") {
+    if (spec.mutating && !hasAuthenticatedRole) {
+      throw new DispatchBridgeError(
+        401,
+        "MISSING_ACTOR_ROLE",
+        "Mutating requests require an authenticated actor role. Provide 'actor_role' or use a valid authenticated token.",
+      );
+    }
+    return null;
+  }
+
+  const mapped = normalizeActorRole(actorRole, "actor_role");
   if (!spec.allowed_roles.includes(mapped)) {
     throw new DispatchBridgeError(
       403,
@@ -197,7 +216,8 @@ export async function invokeDispatchAction(params) {
 
   const spec = resolveToolSpec(params.toolName);
   const actorId = readNonEmptyString(params.actorId, "actor_id");
-  const actorRole = resolveActorRole(spec, params.actorRole);
+  const hasAuthenticatedRole = typeof params.token === "string" && params.token.trim() !== "";
+  const actorRole = resolveActorRole(spec, params.actorRole, { hasAuthenticatedRole });
   const actorType = normalizeActorType(params.actorType);
   const requestId = resolveRequestId(params.requestId);
   const correlationId = resolveCorrelationId(params.correlationId);
@@ -228,10 +248,13 @@ export async function invokeDispatchAction(params) {
     accept: "application/json",
     "x-correlation-id": correlationId,
     "x-actor-id": actorId,
-    "x-actor-role": actorRole,
     "x-actor-type": actorType,
     "x-tool-name": spec.tool_name,
   };
+
+  if (actorRole != null) {
+    headers["x-actor-role"] = actorRole;
+  }
 
   if (traceParent) {
     headers.traceparent = traceParent;
@@ -293,18 +316,30 @@ export async function invokeDispatchAction(params) {
     });
 
     if (response.status >= 400) {
-      throw new DispatchBridgeError(
-        response.status,
-        "DISPATCH_API_ERROR",
-        "dispatch-api rejected tool request",
-        {
-          tool_name: spec.tool_name,
-          endpoint,
-          request_id: requestId,
-          correlation_id: correlationId,
-          dispatch_error: parsedBody,
-        },
-      );
+      const isObject = typeof parsedBody === "object" && parsedBody !== null;
+      const apiError =
+        isObject && typeof parsedBody.error === "object" && parsedBody.error !== null
+          ? parsedBody.error
+          : null;
+      const apiStatus = typeof apiError?.status === "number" ? apiError.status : response.status;
+      const apiCode =
+        typeof apiError?.code === "string" && apiError.code.trim() !== ""
+          ? apiError.code.trim()
+          : "DISPATCH_API_ERROR";
+      const apiMessage =
+        typeof apiError?.message === "string" && apiError.message.trim() !== ""
+          ? apiError.message
+          : "dispatch-api rejected tool request";
+
+      throw new DispatchBridgeError(apiStatus, apiCode, apiMessage, {
+        tool_name: spec.tool_name,
+        endpoint,
+        request_id: requestId,
+        correlation_id: correlationId,
+        status: apiStatus,
+        dispatch_error: apiError ?? parsedBody,
+        policy_error: apiError?.policy_error,
+      });
     }
 
     return {

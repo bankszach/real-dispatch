@@ -1,3 +1,49 @@
+export const DISPATCH_CANONICAL_ROLES = Object.freeze({
+  DISPATCHER: "dispatcher",
+  TECH: "tech",
+  AGENT: "agent",
+  CUSTOMER: "customer",
+  APPROVER: "approver",
+  QA: "qa",
+  FINANCE: "finance",
+});
+
+export const DISPATCH_ROLE_ALIASES = Object.freeze({
+  dispatcher: "dispatcher",
+  tech: "tech",
+  technician: "tech",
+  agent: "agent",
+  customer: "customer",
+  approver: "approver",
+  qa: "qa",
+  finance: "finance",
+  assistant: "dispatcher",
+  bot: "dispatcher",
+});
+
+const DISPATCH_CANONICAL_ROLE_SET = new Set(Object.values(DISPATCH_CANONICAL_ROLES));
+
+export function normalizeDispatchRole(value, sourceLabel = "role") {
+  if (typeof value !== "string") {
+    throw new Error(`${sourceLabel} must be a string`);
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") {
+    throw new Error(`${sourceLabel} is required`);
+  }
+
+  const canonicalRole = DISPATCH_ROLE_ALIASES[normalized] ?? normalized;
+  if (!DISPATCH_CANONICAL_ROLE_SET.has(canonicalRole)) {
+    const allowed = [...DISPATCH_CANONICAL_ROLE_SET].toSorted().join(", ");
+    throw new Error(
+      `${sourceLabel} '${value}' is not a recognized role. Allowed roles: ${allowed}`,
+    );
+  }
+
+  return canonicalRole;
+}
+
 const TOOL_POLICIES_RAW = {
   "ticket.create": {
     tool_name: "ticket.create",
