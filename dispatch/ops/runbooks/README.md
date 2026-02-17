@@ -15,6 +15,7 @@ Alert sources:
 
 Runbook index:
 
+- `demo_day_0.md` (starter validation runbook for first local demonstration)
 - `stuck_scheduling.md`
 - `completion_rejection.md`
 - `idempotency_conflict.md`

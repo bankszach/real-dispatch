@@ -15,6 +15,16 @@ Use the root scripts for local orchestration:
 - `pnpm dispatch:bootstrap`
 - `pnpm dispatch:stack:down`
 
+Demo commands:
+
+- `pnpm dispatch:demo` starts stack, bootstraps, and runs the canonical smoke script.
+- `pnpm dispatch:demo:ci` runs the same path and tears down automatically.
+- `pnpm dispatch:demo:stack` runs stack+bootstrap only (no smoke assertions).
+
+Runbook:
+
+- `dispatch/ops/runbooks/demo_day_0.md`
+
 For demo onboarding, use this sequence:
 
 - `pnpm dispatch:stack:up`

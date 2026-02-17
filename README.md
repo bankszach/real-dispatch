@@ -99,6 +99,13 @@ pnpm check
 pnpm test
 ```
 
+For a guided demo bootstrap, use:
+
+```bash
+cp .env.demo .env
+pnpm dispatch:demo
+```
+
 Dispatch topology helpers:
 
 ```bash
@@ -112,6 +119,12 @@ Demo one-shot startup:
 
 ```bash
 pnpm dispatch:demo:stack
+```
+
+For a full automatic smoke run (includes teardown):
+
+```bash
+pnpm dispatch:demo:ci
 ```
 
 Dispatch CI parity gate (same command used by blocking CI):

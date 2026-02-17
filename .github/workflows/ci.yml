@@ -312,6 +312,76 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
+  # Demo readiness gate: stack-up + bootstrap + smoke script.
+  dispatch-demo-smoke:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      CI: true
+      DISPATCH_BOOTSTRAP_EVIDENCE_PATH: ./dispatch/reports/demo-bootstrap-evidence.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          check-latest: true
+
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
+
+      - name: Runtime versions
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Capture node path
+        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Run demo smoke gate
+        run: pnpm dispatch:demo:ci
+
+      - name: Upload dispatch bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-demo-bootstrap-evidence
+          path: dispatch/reports/demo-bootstrap-evidence.json
+          if-no-files-found: ignore
+          retention-days: 5
+
   # Lint and format always run, even on docs-only changes.
   checks-lint:
     runs-on: blacksmith-4vcpu-ubuntu-2404
