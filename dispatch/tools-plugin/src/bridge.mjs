@@ -55,7 +55,14 @@ function normalizeActorRole(value, sourceLabel) {
     return normalizeDispatchRole(normalized, sourceLabel);
   } catch (error) {
     if (error instanceof Error) {
-      throw new DispatchBridgeError(400, "INVALID_REQUEST", error.message);
+      throw new DispatchBridgeError(401, "INVALID_AUTH_CLAIMS", error.message, {
+        field: sourceLabel,
+        policy_error: {
+          code: "INVALID_AUTH_CLAIMS",
+          message: error.message,
+          dimension: "role",
+        },
+      });
     }
     throw new DispatchBridgeError(400, "INVALID_REQUEST", `Field '${sourceLabel}' is invalid`);
   }
@@ -132,6 +139,10 @@ function resolveToolSpec(toolName) {
   if (!spec) {
     throw new DispatchBridgeError(400, "UNKNOWN_TOOL", "Tool is not allowlisted", {
       tool_name: normalized,
+      policy_error: {
+        code: "UNKNOWN_TOOL",
+        dimension: "tool",
+      },
     });
   }
   return spec;
@@ -155,8 +166,14 @@ function resolveActorRole(spec, actorRole, { hasAuthenticatedRole = false } = {}
     if (spec.mutating && !hasAuthenticatedRole) {
       throw new DispatchBridgeError(
         401,
-        "MISSING_ACTOR_ROLE",
+        "INVALID_AUTH_CLAIMS",
         "Mutating requests require an authenticated actor role. Provide 'actor_role' or use a valid authenticated token.",
+        {
+          policy_error: {
+            code: "INVALID_AUTH_CLAIMS",
+            dimension: "role",
+          },
+        },
       );
     }
     return null;
@@ -171,6 +188,11 @@ function resolveActorRole(spec, actorRole, { hasAuthenticatedRole = false } = {}
       {
         tool_name: spec.tool_name,
         actor_role: mapped,
+        allowed_roles: spec.allowed_roles,
+        policy_error: {
+          code: "TOOL_ROLE_FORBIDDEN",
+          dimension: "role",
+        },
       },
     );
   }

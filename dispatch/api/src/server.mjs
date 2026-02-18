@@ -266,6 +266,9 @@ const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   FORBIDDEN: "role",
   TOOL_NOT_ALLOWED: "tool",
   INVALID_STATE_TRANSITION: "state",
+  MISSING_ACTOR_CONTEXT: "role",
+  INVALID_AUTH_TOKEN: "policy",
+  AUTH_CONFIG_ERROR: "policy",
   FORBIDDEN_SCOPE: "scope",
   CLOSEOUT_REQUIREMENTS_INCOMPLETE: "evidence",
   INVALID_EVIDENCE_REFERENCE: "evidence",
@@ -793,6 +796,13 @@ async function buildOperationalAlertsSnapshot(params) {
 }
 
 function classifyPolicyError(errorCode, details = {}) {
+  const detailDimension = details?.policy_error?.dimension;
+  if (typeof detailDimension === "string" && detailDimension.trim() !== "") {
+    return {
+      dimension: detailDimension,
+    };
+  }
+
   if (errorCode === "CLOSEOUT_REQUIREMENTS_INCOMPLETE") {
     return {
       dimension: "evidence",

@@ -128,3 +128,100 @@ test("invokeDispatchAction works without trace headers", async () => {
   assert.equal(captured[0].traceparent, undefined);
   assert.equal(captured[0].tracestate, undefined);
 });
+
+test("invokeDispatchAction aliases technician role through normalization", async () => {
+  const captured = [];
+  const fakeFetch = async (url, init) => {
+    captured.push(init?.headers ?? {});
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await invokeDispatchAction({
+    baseUrl: "http://dispatch-api.internal",
+    toolName: "tech.check_in",
+    actorId: "tech-story10-bridge",
+    actorRole: "technician",
+    actorType: "AGENT",
+    ticketId: "51000000-0000-4000-8000-000000000001",
+    requestId: "41000000-0000-4000-8000-000000000005",
+    correlationId: "corr-bridge-tech-alias",
+    payload: {
+      timestamp: new Date().toISOString(),
+      location: {
+        lat: 37.7749,
+      },
+    },
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]["x-actor-role"], "technician");
+});
+
+test("invokeDispatchAction rejects unknown actor role with role policy error shape", async () => {
+  await assert.rejects(
+    invokeDispatchAction({
+      baseUrl: "http://dispatch-api.internal",
+      toolName: "ticket.create",
+      actorId: "dispatcher-story10-bridge",
+      actorRole: "hobbit",
+      actorType: "AGENT",
+      requestId: "41000000-0000-4000-8000-000000000004",
+      correlationId: "corr-bridge-unknown-role",
+    }),
+    (error) => {
+      assert.equal(error.code, "INVALID_AUTH_CLAIMS");
+      assert.equal(error.details.policy_error.dimension, "role");
+      assert.equal(error.details.policy_error.code, "INVALID_AUTH_CLAIMS");
+      return true;
+    },
+  );
+});
+
+test("invokeDispatchAction rejects disallowed actor role with role policy error shape", async () => {
+  await assert.rejects(
+    invokeDispatchAction({
+      baseUrl: "http://dispatch-api.internal",
+      toolName: "tech.request_change",
+      actorId: "dispatcher-story10-role-blocked",
+      actorRole: "dispatcher",
+      actorType: "AGENT",
+      ticketId: "51000000-0000-4000-8000-000000000006",
+      requestId: "41000000-0000-4000-8000-000000000006",
+      correlationId: "corr-bridge-role-forbidden",
+      payload: {
+        approval_type: "NTE_INCREASE",
+        reason: "Routine approval request from technician perspective",
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, "TOOL_ROLE_FORBIDDEN");
+      assert.equal(error.details.policy_error.dimension, "role");
+      assert.equal(error.details.policy_error.code, "TOOL_ROLE_FORBIDDEN");
+      return true;
+    },
+  );
+});
+
+test("invokeDispatchAction rejects unknown tool with tool policy error shape", async () => {
+  await assert.rejects(
+    invokeDispatchAction({
+      baseUrl: "http://dispatch-api.internal",
+      toolName: "tool.never.real",
+      actorId: "dispatcher-story10-unknown-tool",
+      actorRole: "dispatcher",
+      actorType: "AGENT",
+      requestId: "41000000-0000-4000-8000-000000000007",
+      correlationId: "corr-bridge-unknown-tool",
+    }),
+    (error) => {
+      assert.equal(error.code, "UNKNOWN_TOOL");
+      assert.equal(error.details.policy_error.dimension, "tool");
+      assert.equal(error.details.policy_error.code, "UNKNOWN_TOOL");
+      return true;
+    },
+  );
+});

@@ -310,6 +310,204 @@ async function createInProgressTicket() {
   return ticketId;
 }
 
+async function createDispatchedTicket() {
+  const dispatcherCreateHeaders = {
+    "Idempotency-Key": nextRequestId(),
+    ...actorHeaders({
+      actorId: "dispatcher-story10-dispatch",
+      actorRole: "dispatcher",
+      toolName: "ticket.create",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-create-dispatch",
+    }),
+  };
+
+  const create = await post("/tickets", dispatcherCreateHeaders, {
+    account_id: accountId,
+    site_id: siteId,
+    summary: "Story 10 UX ticket for dispatch contract checks",
+  });
+  assert.equal(create.status, 201);
+  const ticketId = create.body.id;
+
+  const triage = await post(
+    `/tickets/${ticketId}/triage`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-dispatch",
+        actorRole: "dispatcher",
+        toolName: "ticket.triage",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-triage-dispatch",
+      }),
+    },
+    {
+      priority: "EMERGENCY",
+      incident_type: "CANNOT_SECURE_ENTRY",
+      ready_to_schedule: true,
+      nte_cents: 42000,
+    },
+  );
+  assert.equal(triage.status, 200);
+
+  const start = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + 105 * 60 * 1000).toISOString();
+
+  const propose = await post(
+    `/tickets/${ticketId}/schedule/propose`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-dispatch",
+        actorRole: "dispatcher",
+        toolName: "schedule.propose",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-propose-dispatch",
+      }),
+    },
+    {
+      options: [{ start, end }],
+    },
+  );
+  assert.equal(propose.status, 200);
+
+  const confirm = await post(
+    `/tickets/${ticketId}/schedule/confirm`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-dispatch",
+        actorRole: "dispatcher",
+        toolName: "schedule.confirm",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-confirm-dispatch",
+      }),
+    },
+    {
+      start,
+      end,
+    },
+  );
+  assert.equal(confirm.status, 200);
+
+  const dispatch = await post(
+    `/tickets/${ticketId}/assignment/dispatch`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-dispatch",
+        actorRole: "dispatcher",
+        toolName: "assignment.dispatch",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-dispatch",
+      }),
+    },
+    {
+      tech_id: techId,
+      dispatch_mode: "STANDARD",
+    },
+  );
+  assert.equal(dispatch.status, 200);
+  assert.equal(dispatch.body.state, "DISPATCHED");
+
+  return ticketId;
+}
+
+async function createScheduledTicket() {
+  const dispatcherCreateHeaders = {
+    "Idempotency-Key": nextRequestId(),
+    ...actorHeaders({
+      actorId: "dispatcher-story10-scheduled",
+      actorRole: "dispatcher",
+      toolName: "ticket.create",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-create-scheduled",
+    }),
+  };
+
+  const create = await post("/tickets", dispatcherCreateHeaders, {
+    account_id: accountId,
+    site_id: siteId,
+    summary: "Story 10 UX ticket for bypass checks",
+  });
+  assert.equal(create.status, 201);
+  const ticketId = create.body.id;
+
+  const triage = await post(
+    `/tickets/${ticketId}/triage`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-scheduled",
+        actorRole: "dispatcher",
+        toolName: "ticket.triage",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-triage-scheduled",
+      }),
+    },
+    {
+      priority: "EMERGENCY",
+      incident_type: "CANNOT_SECURE_ENTRY",
+      ready_to_schedule: true,
+      nte_cents: 42000,
+    },
+  );
+  assert.equal(triage.status, 200);
+
+  const start = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + 105 * 60 * 1000).toISOString();
+
+  const propose = await post(
+    `/tickets/${ticketId}/schedule/propose`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-scheduled",
+        actorRole: "dispatcher",
+        toolName: "schedule.propose",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-propose-scheduled",
+      }),
+    },
+    {
+      options: [{ start, end }],
+    },
+  );
+  assert.equal(propose.status, 200);
+
+  const confirm = await post(
+    `/tickets/${ticketId}/schedule/confirm`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-scheduled",
+        actorRole: "dispatcher",
+        toolName: "schedule.confirm",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-confirm-scheduled",
+      }),
+    },
+    {
+      start,
+      end,
+    },
+  );
+  assert.equal(confirm.status, 200);
+  assert.equal(confirm.body.state, "SCHEDULED");
+
+  return ticketId;
+}
+
 test.before(async () => {
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
   run("docker", [
@@ -520,6 +718,213 @@ test("dispatcher cockpit fail-closed role and tool errors include policy dimensi
   assert.equal(toolBlocked.status, 403);
   assert.equal(toolBlocked.body.error.code, "TOOL_NOT_ALLOWED");
   assert.equal(toolBlocked.body.error.policy_error.dimension, "tool");
+});
+
+test("unknown role is fail-closed with role policy error", async () => {
+  const unknownRoleBlocked = await get("/ux/dispatcher/cockpit", {
+    "X-Actor-Id": "dispatcher-story10-unknown-role",
+    "X-Actor-Role": "hobbit",
+    "X-Tool-Name": "dispatcher.cockpit",
+    "X-Account-Scope": accountId,
+    "X-Site-Scope": siteId,
+    "X-Correlation-Id": "corr-story10-unknown-role",
+  });
+
+  assert.equal(unknownRoleBlocked.status, 401);
+  assert.equal(unknownRoleBlocked.body.error.code, "INVALID_AUTH_CLAIMS");
+  assert.equal(unknownRoleBlocked.body.error.policy_error.dimension, "role");
+});
+
+test("dispatcher cockpit action surface excludes assignment recommendation tooling", async () => {
+  const ticketId = await createInProgressTicket();
+  const cockpit = await get(
+    `/ux/dispatcher/cockpit?ticket_id=${ticketId}`,
+    actorHeaders({
+      actorId: "dispatcher-story10",
+      actorRole: "dispatcher",
+      toolName: "dispatcher.cockpit",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-cockpit-recommend-disabled",
+    }),
+  );
+
+  assert.equal(cockpit.status, 200);
+  const row = cockpit.body.queue.find((entry) => entry.ticket_id === ticketId);
+  assert.ok(row);
+  assert.equal(
+    row.actions.some((action) => action.tool_name === "assignment.recommend"),
+    false,
+    "assignment recommendation should not be in cockpit actions",
+  );
+});
+
+test("tech.check_in accepts canonical technician role alias", async () => {
+  const ticketId = await createDispatchedTicket();
+
+  const checkIn = await post(
+    `/tickets/${ticketId}/tech/check-in`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "tech-story10-alias",
+        actorRole: "technician",
+        toolName: "tech.check_in",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-checkin-alias",
+      }),
+    },
+    {
+      timestamp: new Date().toISOString(),
+      location: {
+        lat: 37.7749,
+        lon: -122.4194,
+      },
+    },
+  );
+
+  assert.equal(checkIn.status, 200);
+  assert.equal(checkIn.body.state, "IN_PROGRESS");
+});
+
+test("assignment.recommend returns deterministic transition error before recommendation context is ready", async () => {
+  const create = await post(
+    "/tickets",
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-recommend",
+        actorRole: "dispatcher",
+        toolName: "ticket.create",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-recommend-create",
+      }),
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+      summary: "Story 10 UX recommendation state mismatch",
+    },
+  );
+  assert.equal(create.status, 201);
+  const ticketId = create.body.id;
+
+  const recommend = await post(
+    `/tickets/${ticketId}/assignment/recommend`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-recommend",
+        actorRole: "dispatcher",
+        toolName: "assignment.recommend",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-recommend-blocked",
+      }),
+    },
+    {
+      service_type: "CANNOT_SECURE_ENTRY",
+    },
+  );
+
+  assert.equal(recommend.status, 409);
+  assert.equal(recommend.body.error.code, "INVALID_STATE_TRANSITION");
+  assert.equal(recommend.body.error.policy_error.dimension, "state");
+  assert.equal(recommend.body.error.from_state, "NEW");
+  assert.equal(
+    Array.isArray(recommend.body.error.allowed_from_states),
+    true,
+    "state failure should include allowed_from_states",
+  );
+  assert.equal(recommend.body.error.to_state, null);
+});
+
+test("EMERGENCY_BYPASS dispatch requires explicit confirmation", async () => {
+  const ticketId = await createScheduledTicket();
+
+  const bypassBlocked = await post(
+    `/tickets/${ticketId}/assignment/dispatch`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-bypass",
+        actorRole: "dispatcher",
+        toolName: "assignment.dispatch",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-bypass-blocked",
+      }),
+    },
+    {
+      tech_id: techId,
+      dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_rationale: "High priority safety risk while en route",
+    },
+  );
+
+  assert.equal(bypassBlocked.status, 409);
+  assert.equal(bypassBlocked.body.error.code, "ASSIGNMENT_BYPASS_DENIED");
+  assert.equal(bypassBlocked.body.error.policy_error.dimension, "policy");
+  assert.equal(bypassBlocked.body.error.required_confirmation, true);
+  assert.equal(bypassBlocked.body.error.dispatch_mode, "EMERGENCY_BYPASS");
+});
+
+test("EMERGENCY_BYPASS dispatch records bypass audit markers", async () => {
+  const ticketId = await createScheduledTicket();
+
+  const bypass = await post(
+    `/tickets/${ticketId}/assignment/dispatch`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-bypass-success",
+        actorRole: "dispatcher",
+        toolName: "assignment.dispatch",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-bypass-success",
+      }),
+    },
+    {
+      tech_id: techId,
+      dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_rationale: "Emergency risk escalation observed from dispatch telemetry",
+      dispatch_confirmation: true,
+    },
+  );
+
+  assert.equal(bypass.status, 200);
+  assert.equal(bypass.body.state, "DISPATCHED");
+
+  const timeline = await get(
+    `/tickets/${ticketId}/timeline`,
+    actorHeaders({
+      actorId: "dispatcher-story10-bypass-success",
+      actorRole: "dispatcher",
+      toolName: "ticket.timeline",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-bypass-success-timeline",
+    }),
+  );
+  assert.equal(timeline.status, 200);
+  assert.equal(Array.isArray(timeline.body.events), true);
+
+  const dispatchEvent = [...timeline.body.events]
+    .toReversed()
+    .find((event) => event.tool_name === "assignment.dispatch");
+  assert.ok(dispatchEvent);
+  const dispatchValidation = dispatchEvent.payload?.dispatch_validation;
+  assert.ok(dispatchValidation);
+  assert.equal(dispatchValidation.bypass_used, true);
+  assert.equal(dispatchValidation.bypass_mode, "EMERGENCY_BYPASS");
+  assert.equal(dispatchValidation.dispatch_confirmation, true);
+  assert.equal(
+    dispatchValidation.dispatch_rationale,
+    "Emergency risk escalation observed from dispatch telemetry",
+  );
 });
 
 test("technician packet uses API truth for timeline/evidence/closeout gate and surfaces evidence errors", async () => {

@@ -150,7 +150,12 @@ function normalizeRole(value, sourceLabel) {
     return normalizeDispatchRole(value, sourceLabel);
   } catch (error) {
     if (error instanceof Error) {
-      throw new HttpError(401, "INVALID_AUTH_CLAIMS", error.message);
+      throw new HttpError(401, "INVALID_AUTH_CLAIMS", error.message, {
+        policy_error: {
+          code: "INVALID_AUTH_CLAIMS",
+          dimension: "role",
+        },
+      });
     }
     throw new HttpError(401, "INVALID_AUTH_CLAIMS", `${sourceLabel} is invalid`);
   }
