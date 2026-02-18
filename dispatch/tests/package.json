@@ -1,0 +1,9 @@
+{
+  "name": "@openclaw/dispatch-tests",
+  "version": "2026.2.6-3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cd ../.. && if [ \"$1\" = \"--\" ]; then shift; fi; if [ \"$#\" -eq 0 ]; then test_file=\"dispatch/tests/story_10_ux_spec.node.test.mjs\"; elif [ \"${1#*/}\" != \"$1\" ]; then test_file=\"$1\"; else test_file=\"dispatch/tests/$1\"; fi; node --test \"$test_file\""
+  }
+}

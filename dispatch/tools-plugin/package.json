@@ -3,6 +3,9 @@
   "version": "2026.2.6-3",
   "description": "Real Dispatch closed-loop bridge plugin",
   "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "@sinclair/typebox": "0.34.48"
   },

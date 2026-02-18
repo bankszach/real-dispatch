@@ -759,33 +759,56 @@ test("dispatcher cockpit action surface excludes assignment recommendation tooli
   );
 });
 
-test("tech.check_in accepts canonical technician role alias", async () => {
-  const ticketId = await createDispatchedTicket();
+test("tech.check_in accepts canonical technician role aliases", async () => {
+  const canonicalRoleResults = [];
+  for (const actorRole of ["TECH", "technician"]) {
+    const ticketId = await createDispatchedTicket();
+    const checkIn = await post(
+      `/tickets/${ticketId}/tech/check-in`,
+      {
+        "Idempotency-Key": nextRequestId(),
+        ...actorHeaders({
+          actorId: `tech-story10-alias-${actorRole.toLowerCase()}`,
+          actorRole,
+          toolName: "tech.check_in",
+          accountScope: accountId,
+          siteScope: siteId,
+          correlationId: `corr-story10-checkin-alias-${actorRole.toLowerCase()}`,
+        }),
+      },
+      {
+        timestamp: new Date().toISOString(),
+        location: {
+          lat: 37.7749,
+          lon: -122.4194,
+        },
+      },
+    );
 
-  const checkIn = await post(
-    `/tickets/${ticketId}/tech/check-in`,
-    {
-      "Idempotency-Key": nextRequestId(),
-      ...actorHeaders({
-        actorId: "tech-story10-alias",
-        actorRole: "technician",
-        toolName: "tech.check_in",
+    assert.equal(checkIn.status, 200);
+    assert.equal(checkIn.body.state, "IN_PROGRESS");
+
+    const timeline = await get(
+      `/tickets/${ticketId}/timeline`,
+      actorHeaders({
+        actorId: `tech-story10-alias-timeline-${actorRole.toLowerCase()}`,
+        actorRole: "dispatcher",
+        toolName: "ticket.timeline",
         accountScope: accountId,
         siteScope: siteId,
-        correlationId: "corr-story10-checkin-alias",
+        correlationId: `corr-story10-checkin-alias-timeline-${actorRole.toLowerCase()}`,
       }),
-    },
-    {
-      timestamp: new Date().toISOString(),
-      location: {
-        lat: 37.7749,
-        lon: -122.4194,
-      },
-    },
-  );
+    );
+    assert.equal(timeline.status, 200);
+    assert.equal(timeline.body.events.at(-1)?.actor_role, "technician");
+    canonicalRoleResults.push(checkIn.body.state);
+  }
 
-  assert.equal(checkIn.status, 200);
-  assert.equal(checkIn.body.state, "IN_PROGRESS");
+  assert.deepEqual(
+    canonicalRoleResults,
+    ["IN_PROGRESS", "IN_PROGRESS"],
+    "TECH and TECHNICIAN roles should resolve to the same effective canonical role",
+  );
 });
 
 test("assignment.recommend returns deterministic transition error before recommendation context is ready", async () => {
@@ -839,6 +862,80 @@ test("assignment.recommend returns deterministic transition error before recomme
     "state failure should include allowed_from_states",
   );
   assert.equal(recommend.body.error.to_state, null);
+});
+
+test("expected-invalid requests never return INTERNAL_ERROR", async () => {
+  const expectedInvalidCodes = new Set([
+    "INVALID_REQUEST",
+    "INVALID_AUTH_CLAIMS",
+    "TOOL_ROLE_FORBIDDEN",
+    "UNKNOWN_TOOL",
+    "INVALID_STATE_TRANSITION",
+  ]);
+
+  const dispatchedTicket = await createDispatchedTicket();
+  const invalidRequest = await post(
+    "/tickets",
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-invalid-missing-summary",
+        actorRole: "dispatcher",
+        toolName: "ticket.create",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-missing-summary",
+      }),
+    },
+    {
+      account_id: accountId,
+      site_id: siteId,
+    },
+  );
+  assert.notEqual(invalidRequest.status, 500);
+  assert.equal(invalidRequest.body.error.code, "INVALID_REQUEST");
+  assert.equal(expectedInvalidCodes.has(invalidRequest.body.error.code), true);
+  assert.notEqual(invalidRequest.body.error.code, "INTERNAL_ERROR");
+
+  const transitionInvalid = await post(
+    `/tickets/${dispatchedTicket}/assignment/dispatch`,
+    {
+      "Idempotency-Key": nextRequestId(),
+      ...actorHeaders({
+        actorId: "dispatcher-story10-transition-invalid",
+        actorRole: "dispatcher",
+        toolName: "assignment.dispatch",
+        accountScope: accountId,
+        siteScope: siteId,
+        correlationId: "corr-story10-transition-invalid",
+      }),
+    },
+    {
+      tech_id: techId,
+    },
+  );
+  assert.equal(transitionInvalid.status, 409);
+  assert.equal(transitionInvalid.body.error.code, "INVALID_STATE_TRANSITION");
+  assert.equal(transitionInvalid.body.error.policy_error.dimension, "state");
+  assert.equal(transitionInvalid.body.error.from_state, "DISPATCHED");
+  assert.equal(Array.isArray(transitionInvalid.body.error.allowed_from_states), true);
+  assert.equal(transitionInvalid.body.error.to_state, "DISPATCHED");
+  assert.equal(expectedInvalidCodes.has(transitionInvalid.body.error.code), true);
+  assert.notEqual(transitionInvalid.body.error.code, "INTERNAL_ERROR");
+
+  const unknownRole = await get("/ux/dispatcher/cockpit", {
+    "X-Actor-Id": "dispatcher-story10-unknown-role-contract",
+    "X-Actor-Role": "hobbit",
+    "X-Tool-Name": "dispatcher.cockpit",
+    "X-Account-Scope": accountId,
+    "X-Site-Scope": siteId,
+    "X-Correlation-Id": "corr-story10-unknown-role-contract",
+  });
+  assert.equal(unknownRole.status, 401);
+  assert.equal(unknownRole.body.error.code, "INVALID_AUTH_CLAIMS");
+  assert.equal(unknownRole.body.error.policy_error.dimension, "role");
+  assert.equal(expectedInvalidCodes.has(unknownRole.body.error.code), true);
+  assert.notEqual(unknownRole.body.error.code, "INTERNAL_ERROR");
 });
 
 test("EMERGENCY_BYPASS dispatch requires explicit confirmation", async () => {
@@ -924,6 +1021,87 @@ test("EMERGENCY_BYPASS dispatch records bypass audit markers", async () => {
   assert.equal(
     dispatchValidation.dispatch_rationale,
     "Emergency risk escalation observed from dispatch telemetry",
+  );
+});
+
+test("EMERGENCY_BYPASS dispatch is replay-safe with idempotency-key", async () => {
+  const ticketId = await createScheduledTicket();
+  const idempotencyKey = nextRequestId();
+  const dispatchPayload = {
+    tech_id: techId,
+    dispatch_mode: "EMERGENCY_BYPASS",
+    dispatch_rationale: "Emergency risk escalation observed from dispatch telemetry",
+    dispatch_confirmation: true,
+  };
+  const actor = {
+    actorId: "dispatcher-story10-bypass-idempotent",
+    actorRole: "dispatcher",
+    toolName: "assignment.dispatch",
+    accountScope: accountId,
+    siteScope: siteId,
+  };
+
+  const firstBypass = await post(
+    `/tickets/${ticketId}/assignment/dispatch`,
+    {
+      "Idempotency-Key": idempotencyKey,
+      ...actorHeaders({
+        ...actor,
+        correlationId: "corr-story10-bypass-idempotent-first",
+      }),
+    },
+    dispatchPayload,
+  );
+  assert.equal(firstBypass.status, 200);
+  assert.equal(firstBypass.body.state, "DISPATCHED");
+
+  const firstTimeline = await get(
+    `/tickets/${ticketId}/timeline`,
+    actorHeaders({
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: "ticket.timeline",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-bypass-idempotent-timeline-first",
+    }),
+  );
+  assert.equal(firstTimeline.status, 200);
+  const assignmentDispatchEventsInFirst = firstTimeline.body.events.filter(
+    (event) => event.tool_name === "assignment.dispatch",
+  ).length;
+  assert.equal(assignmentDispatchEventsInFirst, 1);
+
+  const replayBypass = await post(
+    `/tickets/${ticketId}/assignment/dispatch`,
+    {
+      "Idempotency-Key": idempotencyKey,
+      ...actorHeaders({
+        ...actor,
+        correlationId: "corr-story10-bypass-idempotent-second",
+      }),
+    },
+    dispatchPayload,
+  );
+  assert.equal(replayBypass.status, firstBypass.status);
+  assert.deepEqual(replayBypass.body, firstBypass.body);
+
+  const secondTimeline = await get(
+    `/tickets/${ticketId}/timeline`,
+    actorHeaders({
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: "ticket.timeline",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-bypass-idempotent-timeline-second",
+    }),
+  );
+  assert.equal(secondTimeline.status, 200);
+  assert.equal(
+    secondTimeline.body.events.filter((event) => event.tool_name === "assignment.dispatch").length,
+    assignmentDispatchEventsInFirst,
+    "replaying same idempotency key should not create a second dispatch event",
   );
 });
 

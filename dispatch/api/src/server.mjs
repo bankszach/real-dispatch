@@ -4120,7 +4120,7 @@ async function assertEmergencyBypassPreconditions(client, params) {
       "dispatch_mode 'EMERGENCY_BYPASS' requires explicit dispatch_confirmation",
       {
         dispatch_mode: dispatchMode,
-        dispatch_rationale,
+        dispatch_rationale: dispatchRationale,
         required_confirmation: true,
         correlation_id: correlationId,
       },

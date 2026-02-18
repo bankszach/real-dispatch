@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { invokeDispatchAction } from "../src/bridge.mjs";
+import registerDispatchTools from "../src/index.ts";
+
+function collectPluginTools(pluginConfig = null) {
+  const toolSpecs = new Map();
+  const api = {
+    pluginConfig: pluginConfig ?? {},
+    registerTool(toolSpec) {
+      toolSpecs.set(toolSpec.name, toolSpec);
+      return undefined;
+    },
+  };
+
+  registerDispatchTools(api);
+  return toolSpecs;
+}
 
 test("invokeDispatchAction forwards W3C traceparent and tracestate for read tool", async () => {
   const captured = [];
@@ -224,4 +239,15 @@ test("invokeDispatchAction rejects unknown tool with tool policy error shape", a
       return true;
     },
   );
+});
+
+test("dispatch contract status exposes only public bridge tools", async () => {
+  const toolSpecs = collectPluginTools();
+  const statusTool = toolSpecs.get("dispatch_contract_status");
+  assert.ok(statusTool, "dispatch_contract_status tool should be registered");
+  const status = await statusTool.execute?.();
+  const publicTools = status?.details?.tool_names ?? [];
+  assert.equal(Array.isArray(publicTools), true);
+  assert.equal(publicTools.includes("assignment.recommend"), false);
+  assert.equal(publicTools.includes("assignment.dispatch"), true);
 });
