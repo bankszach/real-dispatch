@@ -439,13 +439,13 @@ export const DISPATCH_CONTRACT = {
     http_method: "POST",
     route: "/tickets/{ticketId}/force-close",
     allowed_roles: ["dispatcher", "approver"],
-    allowed_from_states: ["COMPLETED_PENDING_VERIFICATION", "VERIFIED", "INVOICED"],
+    allowed_from_states: ["COMPLETED_PENDING_VERIFICATION"],
     resulting_state: "CLOSED",
     idempotency_required: true,
     payload_schema: Type.Object(
       {
-        override_code: Type.String({ minLength: 1 }),
-        override_reason: Type.String({ minLength: 1 }),
+        override_code: Type.String({ minLength: 5 }),
+        override_reason: Type.String({ minLength: 20 }),
         approver_role: Type.String({ minLength: 1 }),
       },
       { additionalProperties: true },

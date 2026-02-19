@@ -270,7 +270,9 @@ const DEFAULT_REGION_WEIGHT = 500;
 const HOLD_STATE_TO_TARGET = Object.freeze(["READY_TO_SCHEDULE", "SCHEDULE_PROPOSED", "SCHEDULED"]);
 const HOLD_REASON_REQUIRED_FIELDS = Object.freeze(["hold_reason", "confirmation_window"]);
 const HOLD_SNAPSHOT_ID_COLUMN = "id";
-const FORCE_CLOSE_APPROVER_ROLES = Object.freeze(new Set(["dispatcher", "admin"]));
+const FORCE_CLOSE_APPROVER_ROLES = Object.freeze(new Set(["dispatcher", "approver"]));
+const FORCE_CLOSE_OVERRIDE_CODE_MIN_LENGTH = 5;
+const FORCE_CLOSE_OVERRIDE_REASON_MIN_LENGTH = 20;
 const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   FORBIDDEN: "role",
   TOOL_NOT_ALLOWED: "tool",
@@ -578,10 +580,12 @@ function createMetricsRegistry(options = {}) {
   const requestsTotal = new Map();
   const errorsTotal = new Map();
   const transitionsTotal = new Map();
+  const dispatchOverrideCloseByCode = new Map();
   let idempotencyReplayTotal = 0;
   let idempotencyConflictTotal = 0;
   let dispatchAssignmentsWithSnapshotTotal = 0;
   let dispatchAssignmentsWithoutSnapshotTotal = 0;
+  let dispatchOverrideCloseTotal = 0;
   const onChange = typeof options.onChange === "function" ? options.onChange : null;
 
   function incrementCounter(map, key) {
@@ -635,6 +639,13 @@ function createMetricsRegistry(options = {}) {
         return leftTo.localeCompare(rightTo);
       });
 
+    const dispatchOverrideCloseByCodeEntries = Array.from(dispatchOverrideCloseByCode.entries())
+      .map(([code, count]) => ({
+        code,
+        count,
+      }))
+      .toSorted((left, right) => left.code.localeCompare(right.code));
+
     return {
       service: "dispatch-api",
       generated_at: nowIso(),
@@ -644,6 +655,8 @@ function createMetricsRegistry(options = {}) {
         transitions_total: transitions,
         idempotency_replay_total: idempotencyReplayTotal,
         idempotency_conflict_total: idempotencyConflictTotal,
+        dispatch_override_close_total: dispatchOverrideCloseTotal,
+        dispatch_override_close_by_code: dispatchOverrideCloseByCodeEntries,
         dispatch_assignments_with_snapshot_total: dispatchAssignmentsWithSnapshotTotal,
         dispatch_assignments_without_snapshot_total: dispatchAssignmentsWithoutSnapshotTotal,
       },
@@ -699,6 +712,15 @@ function createMetricsRegistry(options = {}) {
     },
     incrementDispatchWithoutSnapshot() {
       dispatchAssignmentsWithoutSnapshotTotal += 1;
+      publishSnapshot();
+    },
+    incrementDispatchOverrideClose(overrideCode) {
+      const normalizedCode =
+        typeof overrideCode === "string" && overrideCode.trim() !== ""
+          ? overrideCode.trim()
+          : "UNKNOWN";
+      dispatchOverrideCloseTotal += 1;
+      incrementCounter(dispatchOverrideCloseByCode, normalizedCode);
       publishSnapshot();
     },
     snapshot() {
@@ -6510,13 +6532,30 @@ function normalizeForceCloseApproverRole(value) {
     throw new HttpError(
       400,
       "INVALID_REQUEST",
-      "approver_role must be 'dispatcher' or 'admin' for force close",
+      `approver_role must be one of: ${[...FORCE_CLOSE_APPROVER_ROLES].toSorted().join(", ")}`,
       {
         approver_role: value,
       },
     );
   }
   return normalizedRole;
+}
+
+function ensureStringMinLength(value, fieldName, minLength) {
+  ensureString(value, fieldName);
+  const trimmed = String(value).trim();
+  if (trimmed.length < minLength) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      `Field '${fieldName}' must be at least ${minLength} characters`,
+      {
+        field: fieldName,
+        min_length: minLength,
+      },
+    );
+  }
+  return trimmed;
 }
 
 async function closeTicketMutation(client, context) {
@@ -6714,7 +6753,7 @@ async function closeTicketMutation(client, context) {
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition({
+  await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "CLOSED",
@@ -6764,13 +6803,38 @@ async function forceCloseTicketMutation(client, context) {
     objectStoreSchemes,
   } = context;
   ensureObject(body);
-  const overrideCode = ensureString(body.override_code, "override_code");
-  const overrideReason = ensureString(body.override_reason, "override_reason");
+  const overrideCode = ensureStringMinLength(
+    body.override_code,
+    "override_code",
+    FORCE_CLOSE_OVERRIDE_CODE_MIN_LENGTH,
+  );
+  const overrideReason = ensureStringMinLength(
+    body.override_reason,
+    "override_reason",
+    FORCE_CLOSE_OVERRIDE_REASON_MIN_LENGTH,
+  );
   const approverRole = normalizeForceCloseApproverRole(body.approver_role);
+  if (actor.actorRole !== approverRole) {
+    throw new HttpError(403, "FORBIDDEN", "approver_role must match authenticated actor role", {
+      approver_role: approverRole,
+      actor_role: actor.actorRole,
+    });
+  }
 
   const existing = await getTicketForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/force-close", existing.state, body);
+  if (existing.state !== "COMPLETED_PENDING_VERIFICATION") {
+    throw new HttpError(
+      409,
+      "INVALID_STATE_TRANSITION",
+      "Force close is only allowed from COMPLETED_PENDING_VERIFICATION",
+      {
+        from_state: existing.state,
+        allowed_from_states: ["COMPLETED_PENDING_VERIFICATION"],
+      },
+    );
+  }
 
   if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
     throw new HttpError(
@@ -6944,7 +7008,7 @@ async function forceCloseTicketMutation(client, context) {
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition({
+  await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "CLOSED",
@@ -6964,12 +7028,18 @@ async function forceCloseTicketMutation(client, context) {
       override_code: overrideCode,
       approver_role: approverRole,
       policy_override: true,
+      override_actor_id: actor.actorId,
+      previous_state: existing.state,
       invoice_reversal: existing.state === "INVOICED",
       closeout_check: closeoutEvaluation,
       immutable_evidence_count: evidenceResult.rowCount,
       closeout_packet_artifact_type: "closeout_packet",
     },
   });
+
+  if (typeof metrics?.incrementDispatchOverrideClose === "function") {
+    metrics.incrementDispatchOverrideClose(overrideCode);
+  }
 
   return {
     status: 200,
@@ -7010,7 +7080,7 @@ async function cancelTicketMutation(client, context) {
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition({
+  await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "CANCELLED",
@@ -7061,7 +7131,7 @@ async function forceHoldMutation(client, context) {
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition({
+  await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "ON_HOLD",
@@ -7126,7 +7196,7 @@ async function forceUnassignMutation(client, context) {
   const ticket = update.rows[0];
 
   if (shouldTransition) {
-    await insertAuditAndTransition({
+    await insertAuditAndTransition(client, {
       ticketId,
       beforeState: existing.state,
       afterState: "SCHEDULED",
@@ -7203,7 +7273,7 @@ async function reopenAfterVerificationMutation(client, context) {
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition({
+  await insertAuditAndTransition(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "IN_PROGRESS",
@@ -7312,7 +7382,7 @@ async function manualBypassMutation(client, context) {
   const ticket = update.rows[0];
 
   if (shouldTransition) {
-    await insertAuditAndTransition({
+    await insertAuditAndTransition(client, {
       ticketId,
       beforeState: existing.state,
       afterState: "COMPLETED_PENDING_VERIFICATION",
