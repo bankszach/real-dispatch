@@ -31,11 +31,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -172,6 +168,8 @@ async function createInProgressTicket(summary, incidentType = "DOOR_WONT_LATCH")
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "Evidence API workflow requires immediate dispatch confirmation",
     },
   );
   assert.equal(dispatch.status, 200);
@@ -210,7 +208,10 @@ async function completeTicket(ticketId, checklistStatus, options = {}) {
   const payload = {
     checklist_status: checklistStatus,
   };
-  if (typeof options.no_signature_reason === "string" && options.no_signature_reason.trim() !== "") {
+  if (
+    typeof options.no_signature_reason === "string" &&
+    options.no_signature_reason.trim() !== ""
+  ) {
     payload.no_signature_reason = options.no_signature_reason.trim();
   }
   if (Array.isArray(options.evidence_refs)) {
@@ -449,7 +450,11 @@ test("tech.complete succeeds when persisted evidence and checklist are complete"
     LIMIT 1;
   `).split("|");
 
-  assert.deepEqual(completeAudit, ["tech.complete", "IN_PROGRESS", "COMPLETED_PENDING_VERIFICATION"]);
+  assert.deepEqual(completeAudit, [
+    "tech.complete",
+    "IN_PROGRESS",
+    "COMPLETED_PENDING_VERIFICATION",
+  ]);
 });
 
 test("evidence list rejects invalid ticket id format", async () => {

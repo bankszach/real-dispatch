@@ -1,7 +1,9 @@
+import { Value } from "@sinclair/typebox/value";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { DISPATCH_CONTRACT } from "../../contracts/dispatch-contract.v1.ts";
 import {
   getDispatchToolPolicy,
   getCommandEndpointPolicy,
@@ -49,6 +51,9 @@ const RUNBOOK_PATHS = Object.freeze({
   IDEMPOTENCY_CONFLICT_SPIKE: "dispatch/ops/runbooks/idempotency_conflict.md",
   AUTH_POLICY_FAILURE_SPIKE: "dispatch/ops/runbooks/auth_policy_failure.md",
   AUTONOMY_CONTROL_ROLLBACK: "dispatch/ops/runbooks/glz_12_autonomy_rollout_controls.md",
+  DB_BACKUP: "dispatch/ops/runbooks/db_backup.md",
+  WAL_ARCHIVE_RECOVERY: "dispatch/ops/runbooks/db_wal_archive_recovery.md",
+  HEALTH_DB_MIGRATION: "dispatch/ops/runbooks/health_db_migration.md",
 });
 const VALID_TICKET_STATES = Object.freeze([
   "NEW",
@@ -67,6 +72,7 @@ const VALID_TICKET_STATES = Object.freeze([
   "VERIFIED",
   "INVOICED",
   "CLOSED",
+  "CANCELLED",
 ]);
 const VALID_PRIORITIES = Object.freeze(["EMERGENCY", "URGENT", "ROUTINE"]);
 const VALID_SLA_STATUSES = Object.freeze(["healthy", "warning", "breach"]);
@@ -76,6 +82,8 @@ const SLA_TARGET_MINUTES_BY_PRIORITY = Object.freeze({
   ROUTINE: 1440,
 });
 const SLA_WARNING_THRESHOLD_MINUTES = 45;
+const DEFAULT_EVIDENCE_VERIFICATION_TIMEOUT_MS = 2500;
+const HEALTH_CHECK_MAX_RETRIES = 2;
 const PRIORITY_SORT_ORDER = Object.freeze({
   EMERGENCY: 0,
   URGENT: 1,
@@ -262,6 +270,7 @@ const DEFAULT_REGION_WEIGHT = 500;
 const HOLD_STATE_TO_TARGET = Object.freeze(["READY_TO_SCHEDULE", "SCHEDULE_PROPOSED", "SCHEDULED"]);
 const HOLD_REASON_REQUIRED_FIELDS = Object.freeze(["hold_reason", "confirmation_window"]);
 const HOLD_SNAPSHOT_ID_COLUMN = "id";
+const FORCE_CLOSE_APPROVER_ROLES = Object.freeze(new Set(["dispatcher", "admin"]));
 const POLICY_ERROR_DIMENSION_BY_CODE = Object.freeze({
   FORBIDDEN: "role",
   TOOL_NOT_ALLOWED: "tool",
@@ -304,6 +313,14 @@ const DISPATCHER_QUEUE_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "rollback_schedule", tool_name: "schedule.rollback" }),
   Object.freeze({ action_id: "open_timeline", tool_name: "ticket.timeline" }),
   Object.freeze({ action_id: "open_technician_packet", tool_name: "tech.job_packet" }),
+  Object.freeze({ action_id: "force_hold", tool_name: "dispatch.force_hold" }),
+  Object.freeze({ action_id: "force_unassign", tool_name: "dispatch.force_unassign" }),
+  Object.freeze({ action_id: "manual_bypass", tool_name: "dispatch.manual_bypass" }),
+  Object.freeze({ action_id: "reopen_after_verification", tool_name: "reopen_after_verification" }),
+  Object.freeze({ action_id: "evidence_exception", tool_name: "closeout.evidence_exception" }),
+  Object.freeze({ action_id: "ticket_close", tool_name: "ticket.close" }),
+  Object.freeze({ action_id: "ticket_force_close", tool_name: "ticket.force_close" }),
+  Object.freeze({ action_id: "ticket_cancel", tool_name: "ticket.cancel" }),
 ]);
 const TECH_PACKET_ACTION_BLUEPRINTS = Object.freeze([
   Object.freeze({ action_id: "check_in", tool_name: "tech.check_in" }),
@@ -384,6 +401,10 @@ const AUDIT_PAYLOAD_ALLOWED_KEYS = Object.freeze([
   "verification_evidence_refs",
   "verified_at",
   "invoice_generated",
+  "override_code",
+  "approver_role",
+  "policy_override",
+  "invoice_reversal",
   "evidence_item_id",
   "no_signature_reason",
   "evidence_refs",
@@ -890,6 +911,10 @@ function serializeEvidenceItem(row) {
     kind: row.kind,
     uri: row.uri,
     checksum: row.checksum,
+    is_immutable: Boolean(row.is_immutable ?? false),
+    immutable_reason: row.immutable_reason ?? null,
+    immutable_by: row.immutable_by ?? null,
+    immutable_at: row.immutable_at ? new Date(row.immutable_at).toISOString() : null,
     metadata: row.metadata ?? {},
     created_by: row.created_by,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
@@ -1393,6 +1418,143 @@ function getCommandPolicy(endpoint) {
   return policy;
 }
 
+const DISPATCH_CONTRACT_BY_ROUTE = Object.freeze(
+  Object.fromEntries(
+    Object.values(DISPATCH_CONTRACT).map((contract) => [contract.route, contract]),
+  ),
+);
+
+function getDispatchContractByRoute(route) {
+  return DISPATCH_CONTRACT_BY_ROUTE[route] ?? null;
+}
+
+function buildContractValidationDetails(contract, payload) {
+  const rawErrors = [...Value.Errors(contract.payload_schema, payload)];
+  return rawErrors.map((error) => ({
+    keyword: error.keyword,
+    message: error.message,
+    path: String(error.path),
+    schema_path: String(error.schemaPath),
+  }));
+}
+
+function assertContractBypassRequirements(contract, payload, actor) {
+  const bypass = contract.bypass_requirements;
+  if (!bypass || payload == null || typeof payload !== "object" || Array.isArray(payload)) {
+    return;
+  }
+
+  const rawMode = payload[bypass.mode_field];
+  if (typeof rawMode !== "string" || rawMode.trim() === "") {
+    return;
+  }
+
+  if (rawMode.toUpperCase() !== String(bypass.required_mode)) {
+    return;
+  }
+
+  const missingFields = [];
+  for (const field of bypass.required_fields) {
+    const value = payload[field];
+    if (field === "dispatch_confirmation") {
+      if (typeof value !== "boolean") {
+        missingFields.push({ field, reason: "must be a boolean" });
+      }
+      continue;
+    }
+
+    if (typeof value !== "string" || value.trim() === "") {
+      missingFields.push({ field, reason: "must be a non-empty string" });
+    }
+  }
+
+  if (missingFields.length > 0) {
+    if (bypass.require_actor_identity && (!actor?.actorId || actor.actorRole == null)) {
+      throw new HttpError(
+        409,
+        "ASSIGNMENT_BYPASS_DENIED",
+        `Bypass mode '${bypass.required_mode}' requires actor identity`,
+        {
+          dispatch_mode: rawMode,
+        },
+      );
+    }
+
+    throw new HttpError(
+      409,
+      "ASSIGNMENT_BYPASS_DENIED",
+      `Bypass mode '${bypass.required_mode}' requires additional fields in payload`,
+      {
+        dispatch_mode: rawMode,
+        required_confirmation: bypass.required_fields.includes("dispatch_confirmation"),
+        missing_fields: missingFields,
+      },
+    );
+  }
+}
+
+async function assertCommandContractConformance(params) {
+  const { client, endpoint, ticketId, actor, body, authRuntime, requestId } = params;
+
+  const policy = getCommandPolicy(endpoint);
+  if (!policy.allowed_roles.includes(actor.actorRole)) {
+    throw new HttpError(
+      403,
+      "FORBIDDEN",
+      `Role '${actor.actorRole}' is not allowed for this command`,
+      {
+        actor_role: actor.actorRole,
+        allowed_roles: policy.allowed_roles,
+        request_id: requestId,
+      },
+    );
+  }
+
+  const contract = getDispatchContractByRoute(endpoint);
+  if (!contract) {
+    throw new HttpError(
+      500,
+      "INTERNAL_ERROR",
+      `Missing dispatch contract definition for endpoint '${endpoint}'`,
+    );
+  }
+
+  if (!contract.payload_schema || !Value.Check(contract.payload_schema, body ?? {})) {
+    throw new HttpError(400, "INVALID_REQUEST", "Request payload violates dispatch contract", {
+      request_id: requestId,
+      tool_name: contract.tool_name,
+      validation_errors: buildContractValidationDetails(contract, body ?? {}),
+    });
+  }
+
+  if (Array.isArray(contract.allowed_from_states) && contract.allowed_from_states.length > 0) {
+    const result = await client.query(
+      "SELECT id, state, account_id, site_id FROM tickets WHERE id = $1 FOR UPDATE",
+      [ticketId],
+    );
+    if (result.rowCount === 0) {
+      throw new HttpError(404, "TICKET_NOT_FOUND", "Ticket not found");
+    }
+
+    const ticket = result.rows[0];
+    assertTicketScope(authRuntime, actor, ticket);
+
+    if (!contract.allowed_from_states.includes(ticket.state)) {
+      throw new HttpError(409, "INVALID_STATE_TRANSITION", "Transition is not allowed", {
+        from_state: ticket.state,
+        allowed_from_states: contract.allowed_from_states,
+        to_state: contract.resulting_state,
+        request_id: requestId,
+      });
+    }
+    assertContractBypassRequirements(contract, body, actor);
+    return ticket;
+  }
+
+  assertContractBypassRequirements(contract, body, actor);
+  return null;
+}
+
 function parseIdempotencyKey(headers) {
   const requestId = lowerHeader(headers, "idempotency-key");
   if (!requestId || requestId.trim() === "") {
@@ -1795,6 +1957,10 @@ async function getTicketEvidence(pool, ticketId) {
         kind,
         uri,
         checksum,
+        is_immutable,
+        immutable_reason,
+        immutable_by,
+        immutable_at,
         metadata,
         created_by,
         created_at
@@ -2296,7 +2462,7 @@ async function findOpenIntakeDuplicate(client, payload) {
       WHERE account_id = $1
         AND site_id = $2
         AND identity_signature = $3
-        AND state <> 'CLOSED'
+        AND state NOT IN ('CLOSED', 'CANCELLED')
         AND created_at >= (now() - ($4::int * interval '1 minute'))
       ORDER BY created_at DESC, id DESC
       LIMIT 1
@@ -2381,9 +2547,17 @@ async function getLatestCompletionPayload(pool, ticketId) {
   return result.rows[0].payload ?? null;
 }
 
-function evaluatePacketCloseoutGate(params) {
-  const { incidentType, evidenceRows, checklistStatus, noSignatureReason, objectStoreSchemes } =
-    params;
+async function evaluatePacketCloseoutGate(params) {
+  const {
+    incidentType,
+    evidenceRows,
+    checklistStatus,
+    noSignatureReason,
+    objectStoreSchemes,
+    requireHeadVerification = false,
+    checksumEnforced = false,
+    headCheckTimeoutMs = DEFAULT_EVIDENCE_VERIFICATION_TIMEOUT_MS,
+  } = params;
 
   if (typeof incidentType !== "string" || incidentType.trim() === "") {
     return {
@@ -2402,12 +2576,15 @@ function evaluatePacketCloseoutGate(params) {
   const normalizedIncidentType = incidentType.trim().toUpperCase();
   let evidenceValidation;
   try {
-    evidenceValidation = resolveCloseoutValidationContext({
+    evidenceValidation = await resolveCloseoutValidationContext({
       incidentType: normalizedIncidentType,
       noSignatureReason,
       explicitEvidenceRefs: [],
       evidenceRows,
       objectStoreSchemes,
+      requireHeadVerification,
+      checksumEnforced,
+      headCheckTimeoutMs,
     });
   } catch (error) {
     if (error instanceof HttpError && error.code === "CLOSEOUT_REQUIREMENTS_INCOMPLETE") {
@@ -2521,7 +2698,7 @@ async function buildDispatcherCockpitView(params) {
     values.push(stateFilter);
     where.push(`t.state = ANY($${values.length}::ticket_state[])`);
   } else {
-    where.push("t.state <> 'CLOSED'");
+    where.push("t.state NOT IN ('CLOSED', 'CANCELLED')");
   }
 
   if (priorityFilter.length > 0) {
@@ -2701,7 +2878,16 @@ async function buildDispatcherCockpitView(params) {
 }
 
 async function buildTechnicianJobPacketView(params) {
-  const { pool, actor, authRuntime, ticketId, objectStoreSchemes } = params;
+  const {
+    pool,
+    actor,
+    authRuntime,
+    ticketId,
+    objectStoreSchemes,
+    evidenceHeadValidationEnabled = false,
+    evidenceChecksumEnforced = false,
+    evidenceHeadTimeoutMs = DEFAULT_EVIDENCE_VERIFICATION_TIMEOUT_MS,
+  } = params;
   validateTicketId(ticketId);
 
   const ticketResult = await pool.query(
@@ -2775,12 +2961,15 @@ async function buildTechnicianJobPacketView(params) {
   const requiredChecklistKeys = template?.required_checklist_keys ?? [];
   const checklistStatusRaw = parseCompletionChecklistStatus(latestCompletionPayload);
   const checklistStatus = normalizeChecklistStatus(requiredChecklistKeys, checklistStatusRaw);
-  const closeoutGate = evaluatePacketCloseoutGate({
+  const closeoutGate = await evaluatePacketCloseoutGate({
     incidentType: ticketRow.incident_type,
     evidenceRows,
     checklistStatus,
     noSignatureReason,
     objectStoreSchemes,
+    requireHeadVerification: params.evidenceHeadValidationEnabled,
+    checksumEnforced: params.evidenceChecksumEnforced,
+    headCheckTimeoutMs: params.evidenceHeadTimeoutMs,
   });
 
   const evidenceKeySet = new Set();
@@ -3039,12 +3228,17 @@ function parseHoldReason(value) {
   return hasValidUppercaseValue(value, HOLD_REASON_SET, "hold_reason");
 }
 
+function parseOptionalHoldReason(value) {
+  const normalized = normalizeOptionalString(value, "hold_reason");
+  return normalized == null ? null : hasValidUppercaseValue(value, HOLD_REASON_SET, "hold_reason");
+}
+
 function parseHoldConfirmationLog(value) {
   if (!isUuid(value)) {
     throw new HttpError(
       400,
       "INVALID_REQUEST",
-      "Field 'customer_confirmation_log' must be a valid UUID",
+      "Field 'customer_confirmation_id' must be a valid UUID",
     );
   }
   return value;
@@ -3256,6 +3450,34 @@ function parseObjectStoreSchemes(value) {
   return new Set(entries);
 }
 
+function parseBooleanValue(value, fallbackValue) {
+  if (value == null) {
+    return fallbackValue;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallbackValue;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "off", "no", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return fallbackValue;
+}
+
+function parsePositiveIntegerValue(value, fallbackValue) {
+  const valueAsNumber = Number(value);
+  if (!Number.isFinite(valueAsNumber) || !Number.isInteger(valueAsNumber) || valueAsNumber <= 0) {
+    return fallbackValue;
+  }
+  return valueAsNumber;
+}
+
 function isObjectStoreResolvableUri(uri, objectStoreSchemes) {
   if (typeof uri !== "string" || uri.trim() === "") {
     return false;
@@ -3317,6 +3539,117 @@ function buildEvidenceLookup(rows) {
   };
 }
 
+function normalizeEvidenceChecksum(value) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "" ? null : normalized;
+}
+
+function normalizeEtag(value) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (normalized === "") {
+    return null;
+  }
+  return normalized.replace(/^W\//i, "").replace(/^"|"$/g, "").toLowerCase();
+}
+
+function isChecksumMatch(checksum, etagValue) {
+  const normalizedChecksum = normalizeEvidenceChecksum(checksum);
+  const normalizedEtag = normalizeEtag(etagValue);
+  if (!normalizedChecksum || !normalizedEtag) {
+    return false;
+  }
+  return normalizedChecksum === normalizedEtag;
+}
+
+async function verifyEvidenceUriForHeadProbe(uri, options) {
+  const { checksum, timeoutMs } = options;
+  const normalizedUri = String(uri).trim();
+  const timeout = Number(timeoutMs);
+  const resolvedTimeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout : 2500;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
+  try {
+    const response = await fetch(normalizedUri, {
+      method: "HEAD",
+      redirect: "follow",
+      headers: { "User-Agent": "real-dispatch-evidence-verifier" },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason: "UNREACHABLE_URI",
+        uri: normalizedUri,
+      };
+    }
+
+    if (checksum) {
+      const etag = response.headers.get("etag");
+      const contentMd5 = response.headers.get("content-md5");
+      if (!isChecksumMatch(checksum, etag) && !isChecksumMatch(checksum, contentMd5)) {
+        return {
+          ok: false,
+          reason: "CHECKSUM_MISMATCH",
+          uri: normalizedUri,
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      uri: normalizedUri,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error?.name === "AbortError" ? "HEAD_TIMEOUT" : "NETWORK_ERROR",
+      message: error?.message ?? null,
+      uri: normalizedUri,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function verifyEvidenceUrisAgainstObjectStore(rows, options) {
+  const { objectStoreSchemes, requireHeadVerification, checksumEnforced, timeoutMs } = options;
+  if (!requireHeadVerification || !Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  const seenUri = new Set();
+  const probes = [];
+  for (const row of rows) {
+    const candidateUri = typeof row?.uri === "string" ? row.uri.trim() : "";
+    if (candidateUri === "" || seenUri.has(candidateUri)) {
+      continue;
+    }
+    if (!isObjectStoreResolvableUri(candidateUri, objectStoreSchemes)) {
+      continue;
+    }
+    seenUri.add(candidateUri);
+    probes.push(
+      verifyEvidenceUriForHeadProbe(candidateUri, {
+        checksum: checksumEnforced ? normalizeEvidenceChecksum(row?.checksum) : null,
+        timeoutMs,
+      }),
+    );
+  }
+
+  const probeResults = await Promise.all(probes);
+  return probeResults
+    .filter((result) => result && !result.ok && typeof result.uri === "string")
+    .map((result) => result.uri);
+}
+
 function resolveEvidenceReferenceCandidate(reference, lookup) {
   if (isUuid(reference)) {
     return lookup.byId.get(reference) ?? null;
@@ -3332,13 +3665,16 @@ function uniqueSorted(values) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveCloseoutValidationContext(params) {
+async function resolveCloseoutValidationContext(params) {
   const {
     incidentType,
     noSignatureReason,
     explicitEvidenceRefs,
     evidenceRows,
     objectStoreSchemes,
+    requireHeadVerification = false,
+    checksumEnforced = false,
+    headCheckTimeoutMs = DEFAULT_EVIDENCE_VERIFICATION_TIMEOUT_MS,
   } = params;
 
   const lookup = buildEvidenceLookup(evidenceRows);
@@ -3404,6 +3740,16 @@ function resolveCloseoutValidationContext(params) {
     }
   }
 
+  const headInvalidEvidenceRefs = await verifyEvidenceUrisAgainstObjectStore(evidenceRows, {
+    objectStoreSchemes,
+    requireHeadVerification,
+    checksumEnforced,
+    timeoutMs: headCheckTimeoutMs,
+  });
+  for (const invalidUri of headInvalidEvidenceRefs) {
+    invalidEvidenceRefs.push(invalidUri);
+  }
+
   const invalidEvidenceRefsSorted = uniqueSorted(
     invalidEvidenceRefs.filter((entry) => typeof entry === "string" && entry.trim() !== ""),
   );
@@ -3444,6 +3790,125 @@ function evaluateCloseoutCandidateRiskProfile(params) {
     evidence_keys: [...evidenceKeys].toSorted(),
     evidence_items: evidenceRows.length,
     incident_type: incidentType,
+  };
+}
+
+async function markEvidenceRowsImmutable(client, params) {
+  const { ticketId, actor, requestId, evidenceRows, reason = "closeout_verification" } = params;
+  if (!client || !Array.isArray(evidenceRows) || evidenceRows.length === 0) {
+    return;
+  }
+
+  const evidenceIds = evidenceRows
+    .map((row) => {
+      const id = String(row?.id ?? "");
+      return isUuid(id) ? id : null;
+    })
+    .filter(Boolean);
+
+  if (evidenceIds.length === 0) {
+    return;
+  }
+
+  await client.query(
+    `
+      UPDATE evidence_items
+      SET
+        is_immutable = TRUE,
+        immutable_reason = $2,
+        immutable_by = $3,
+        immutable_request_id = $4,
+        immutable_at = COALESCE(immutable_at, now())
+      WHERE ticket_id = $1
+        AND id = ANY($5::uuid[])
+    `,
+    [ticketId, reason, actor?.actorId ?? null, requestId ?? null, evidenceIds],
+  );
+}
+
+async function insertCloseoutArtifact(client, params) {
+  const {
+    ticketId,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    artifactType,
+    artifactName,
+    artifactPayload,
+  } = params;
+  const payload = artifactPayload == null ? {} : artifactPayload;
+  const artifactHash = canonicalJsonHash(payload);
+
+  await client.query(
+    `
+      INSERT INTO closeout_artifacts (
+        ticket_id,
+        artifact_type,
+        artifact_name,
+        artifact_hash,
+        artifact_payload,
+        created_by,
+        request_id,
+        correlation_id,
+        trace_id
+      )
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)
+      ON CONFLICT (ticket_id, artifact_type)
+      DO UPDATE
+        SET
+          artifact_name = EXCLUDED.artifact_name,
+          artifact_hash = EXCLUDED.artifact_hash,
+          artifact_payload = EXCLUDED.artifact_payload,
+          created_by = EXCLUDED.created_by,
+          request_id = EXCLUDED.request_id,
+          correlation_id = EXCLUDED.correlation_id,
+          trace_id = EXCLUDED.trace_id,
+          created_at = now()
+    `,
+    [
+      ticketId,
+      artifactType,
+      artifactName ?? null,
+      artifactHash,
+      payload,
+      actor?.actorId ?? null,
+      requestId,
+      correlationId,
+      traceId,
+    ],
+  );
+}
+
+function buildCloseoutPacketPayload(params) {
+  const {
+    ticket,
+    closeoutCheck,
+    evidence,
+    closeoutRequest,
+    evidenceValidation,
+    closureReason = null,
+    actor,
+  } = params;
+  return {
+    ticket_id: ticket.id,
+    ticket_state: ticket.state,
+    closure_reason: closureReason,
+    actor_id: actor?.actorId ?? null,
+    actor_role: actor?.actorRole ?? null,
+    generated_at: nowIso(),
+    closeout_check: closeoutCheck ?? null,
+    closeout_context: closeoutRequest ?? null,
+    evidence_validation: evidenceValidation ?? null,
+    evidence_items: evidence.length,
+    evidence: evidence.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      uri: row.uri,
+      checksum: row.checksum ?? null,
+      evidence_key: readEvidenceKeyFromMetadata(row.metadata),
+      immutable: Boolean(row.is_immutable),
+    })),
   };
 }
 
@@ -4615,7 +5080,7 @@ async function releaseScheduleMutation(client, context) {
   const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
     context;
   ensureObject(body);
-  const confirmationLog = parseHoldConfirmationLog(body.customer_confirmation_log);
+  const confirmationLog = parseHoldConfirmationLog(body.customer_confirmation_id);
 
   const existing = await getTicketForUpdate(client, ticketId);
   assertTicketScope(authRuntime, actor, existing);
@@ -5406,7 +5871,8 @@ async function qaVerifyMutation(client, context) {
 
   const evidenceResult = await client.query(
     `
-      SELECT id, kind, uri, metadata
+    SELECT id, kind, uri, metadata
+       , checksum
       FROM evidence_items
       WHERE ticket_id = $1
       ORDER BY created_at ASC, id ASC
@@ -5414,12 +5880,15 @@ async function qaVerifyMutation(client, context) {
     [ticketId],
   );
 
-  const verificationEvidenceValidation = resolveCloseoutValidationContext({
+  const verificationEvidenceValidation = await resolveCloseoutValidationContext({
     incidentType: existing.incident_type.trim(),
     noSignatureReason: completionNoSignatureReason,
     explicitEvidenceRefs: completionEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
+    requireHeadVerification,
+    checksumEnforced: evidenceChecksumEnforcement,
+    headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
   if (verificationEvidenceValidation.invalid_evidence_refs.length > 0) {
@@ -5670,7 +6139,7 @@ async function techCompleteMutation(client, context) {
 
   const evidenceResult = await client.query(
     `
-      SELECT id, kind, uri, metadata
+      SELECT id, kind, uri, checksum, metadata
       FROM evidence_items
       WHERE ticket_id = $1
       ORDER BY created_at ASC, id ASC
@@ -5678,12 +6147,15 @@ async function techCompleteMutation(client, context) {
     [ticketId],
   );
 
-  const evidenceValidation = resolveCloseoutValidationContext({
+  const evidenceValidation = await resolveCloseoutValidationContext({
     incidentType: existing.incident_type.trim(),
     noSignatureReason,
     explicitEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
+    requireHeadVerification,
+    checksumEnforced: evidenceChecksumEnforcement,
+    headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
   if (evidenceValidation.invalid_evidence_refs.length > 0) {
@@ -5840,7 +6312,7 @@ async function closeoutCandidateMutation(client, context) {
 
   const evidenceResult = await client.query(
     `
-      SELECT id, kind, uri, metadata
+      SELECT id, kind, uri, checksum, metadata
       FROM evidence_items
       WHERE ticket_id = $1
       ORDER BY created_at ASC, id ASC
@@ -5848,12 +6320,15 @@ async function closeoutCandidateMutation(client, context) {
     [ticketId],
   );
 
-  const evidenceValidation = resolveCloseoutValidationContext({
+  const evidenceValidation = await resolveCloseoutValidationContext({
     incidentType: existing.incident_type.trim(),
     noSignatureReason,
     explicitEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
+    requireHeadVerification,
+    checksumEnforced: evidenceChecksumEnforcement,
+    headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
   if (evidenceValidation.invalid_evidence_refs.length > 0) {
@@ -5992,6 +6467,1111 @@ async function closeoutCandidateMutation(client, context) {
   return {
     status: 200,
     body: serializeTicket(ticket),
+  };
+}
+
+function resolveLatestCloseoutCandidatePayload(row) {
+  const payload = row?.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const request = payload.request;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    return null;
+  }
+  return request;
+}
+
+async function getLatestCloseoutCandidatePayload(client, ticketId) {
+  const result = await client.query(
+    `
+      SELECT payload
+      FROM audit_events
+      WHERE ticket_id = $1
+        AND tool_name IN ('tech.complete', 'closeout.candidate')
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [ticketId],
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return resolveLatestCloseoutCandidatePayload(result.rows[0]);
+}
+
+function parseOptionalTimestamp(value, fieldName) {
+  return value == null ? null : parseIsoDate(value, fieldName);
+}
+
+function normalizeForceCloseApproverRole(value) {
+  const normalizedRole = normalizeOptionalString(value, "approver_role");
+  if (!FORCE_CLOSE_APPROVER_ROLES.has(normalizedRole)) {
+    throw new HttpError(
+      400,
+      "INVALID_REQUEST",
+      "approver_role must be 'dispatcher' or 'admin' for force close",
+      {
+        approver_role: value,
+      },
+    );
+  }
+  return normalizedRole;
+}
+
+async function closeTicketMutation(client, context) {
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    objectStoreSchemes,
+  } = context;
+  ensureObject(body);
+  const reason = normalizeOptionalString(body.reason, "reason");
+  const closeoutOverrideCode = normalizeOptionalString(
+    body.closeout_override_code,
+    "closeout_override_code",
+  );
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/close", existing.state, body);
+
+  if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "TEMPLATE_NOT_FOUND",
+        incident_type: null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+      },
+    );
+  }
+
+  const evidenceResult = await client.query(
+    `
+      SELECT id, kind, uri, checksum, metadata
+      FROM evidence_items
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+
+  const latestCloseoutRequest = await getLatestCloseoutCandidatePayload(client, ticketId);
+  if (!latestCloseoutRequest) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout context is required before ticket close",
+      {
+        requirement_code: "MISSING_COMPLETION_CONTEXT",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+      },
+    );
+  }
+
+  const closeoutChecklist = latestCloseoutRequest.checklist_status;
+  const checklistStatus =
+    closeoutChecklist && typeof closeoutChecklist === "object" && !Array.isArray(closeoutChecklist)
+      ? closeoutChecklist
+      : {};
+  const noSignatureReason =
+    typeof latestCloseoutRequest.no_signature_reason === "string" &&
+    latestCloseoutRequest.no_signature_reason.trim() !== ""
+      ? latestCloseoutRequest.no_signature_reason.trim()
+      : null;
+
+  const evidenceValidation = await resolveCloseoutValidationContext({
+    incidentType: existing.incident_type.trim(),
+    noSignatureReason,
+    explicitEvidenceRefs: [],
+    evidenceRows: evidenceResult.rows,
+    objectStoreSchemes,
+    requireHeadVerification: true,
+    checksumEnforced: evidenceChecksumEnforcement,
+    headCheckTimeoutMs: evidenceHeadTimeoutMs,
+  });
+
+  if (evidenceValidation.invalid_evidence_refs.length > 0) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "INVALID_EVIDENCE_REFERENCE",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
+      },
+    );
+  }
+
+  let closeoutEvaluation;
+  try {
+    const evidenceKeys = [];
+    for (const row of evidenceResult.rows) {
+      const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+      if (evidenceKey) {
+        evidenceKeys.push(evidenceKey);
+      }
+    }
+    if (
+      evidenceValidation.signature_satisfied &&
+      !evidenceKeys.includes("signature_or_no_signature_reason")
+    ) {
+      evidenceKeys.push("signature_or_no_signature_reason");
+    }
+    closeoutEvaluation = evaluateCloseoutRequirements({
+      incident_type: existing.incident_type.trim(),
+      evidence_items: evidenceKeys,
+      checklist_status: checklistStatus,
+    });
+  } catch (error) {
+    if (error instanceof IncidentTemplatePolicyError) {
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Closeout requirements are incomplete",
+        {
+          requirement_code: "TEMPLATE_NOT_FOUND",
+          incident_type: existing.incident_type.trim().toUpperCase(),
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+          invalid_evidence_refs: [],
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (!closeoutEvaluation.ready) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: closeoutEvaluation.code,
+        incident_type: closeoutEvaluation.incident_type,
+        template_version: closeoutEvaluation.template_version,
+        missing_evidence_keys: closeoutEvaluation.missing_evidence_keys,
+        missing_checklist_keys: closeoutEvaluation.missing_checklist_keys,
+        invalid_evidence_refs: [],
+      },
+    );
+  }
+
+  await markEvidenceRowsImmutable(client, {
+    ticketId,
+    actor,
+    requestId,
+    evidenceRows: evidenceResult.rows,
+    reason: "closeout_verification",
+  });
+
+  const closeoutPacket = buildCloseoutPacketPayload({
+    ticket: existing,
+    closeoutCheck: closeoutEvaluation,
+    closeoutRequest: latestCloseoutRequest,
+    evidenceValidation,
+    evidence: evidenceResult.rows,
+    closureReason: reason,
+    actor,
+  });
+  await insertCloseoutArtifact(client, {
+    ticketId,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    artifactType: "closeout_packet",
+    artifactName: `closeout-${ticketId}.json`,
+    artifactPayload: closeoutPacket,
+  });
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'CLOSED',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition({
+    ticketId,
+    beforeState: existing.state,
+    afterState: "CLOSED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/close",
+      requested_at: nowIso(),
+      request: body,
+      reason,
+      closeout_override_code: closeoutOverrideCode,
+      policy_override: false,
+      closeout_check: closeoutEvaluation,
+      immutable_evidence_count: evidenceResult.rowCount,
+      closeout_packet_artifact_type: "closeout_packet",
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(ticket),
+      closeout_packet: {
+        artifact_type: "closeout_packet",
+        artifact_name: `closeout-${ticketId}.json`,
+      },
+    },
+  };
+}
+
+async function forceCloseTicketMutation(client, context) {
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    metrics,
+    authRuntime,
+    objectStoreSchemes,
+  } = context;
+  ensureObject(body);
+  const overrideCode = ensureString(body.override_code, "override_code");
+  const overrideReason = ensureString(body.override_reason, "override_reason");
+  const approverRole = normalizeForceCloseApproverRole(body.approver_role);
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/force-close", existing.state, body);
+
+  if (typeof existing.incident_type !== "string" || existing.incident_type.trim() === "") {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "TEMPLATE_NOT_FOUND",
+        incident_type: null,
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+      },
+    );
+  }
+
+  const evidenceResult = await client.query(
+    `
+      SELECT id, kind, uri, checksum, metadata
+      FROM evidence_items
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+
+  const latestCloseoutRequest = await getLatestCloseoutCandidatePayload(client, ticketId);
+  if (!latestCloseoutRequest) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout context is required before ticket close",
+      {
+        requirement_code: "MISSING_COMPLETION_CONTEXT",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+      },
+    );
+  }
+
+  const closeoutChecklist = latestCloseoutRequest.checklist_status;
+  const checklistStatus =
+    closeoutChecklist && typeof closeoutChecklist === "object" && !Array.isArray(closeoutChecklist)
+      ? closeoutChecklist
+      : {};
+  const noSignatureReason =
+    typeof latestCloseoutRequest.no_signature_reason === "string" &&
+    latestCloseoutRequest.no_signature_reason.trim() !== ""
+      ? latestCloseoutRequest.no_signature_reason.trim()
+      : null;
+
+  const evidenceValidation = await resolveCloseoutValidationContext({
+    incidentType: existing.incident_type.trim(),
+    noSignatureReason,
+    explicitEvidenceRefs: [],
+    evidenceRows: evidenceResult.rows,
+    objectStoreSchemes,
+    requireHeadVerification: true,
+    checksumEnforced: evidenceChecksumEnforcement,
+    headCheckTimeoutMs: evidenceHeadTimeoutMs,
+  });
+
+  if (evidenceValidation.invalid_evidence_refs.length > 0) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: "INVALID_EVIDENCE_REFERENCE",
+        incident_type: existing.incident_type.trim().toUpperCase(),
+        template_version: null,
+        missing_evidence_keys: [],
+        missing_checklist_keys: [],
+        invalid_evidence_refs: evidenceValidation.invalid_evidence_refs,
+      },
+    );
+  }
+
+  let closeoutEvaluation;
+  try {
+    const evidenceKeys = [];
+    for (const row of evidenceResult.rows) {
+      const evidenceKey = readEvidenceKeyFromMetadata(row.metadata);
+      if (evidenceKey) {
+        evidenceKeys.push(evidenceKey);
+      }
+    }
+    if (
+      evidenceValidation.signature_satisfied &&
+      !evidenceKeys.includes("signature_or_no_signature_reason")
+    ) {
+      evidenceKeys.push("signature_or_no_signature_reason");
+    }
+    closeoutEvaluation = evaluateCloseoutRequirements({
+      incident_type: existing.incident_type.trim(),
+      evidence_items: evidenceKeys,
+      checklist_status: checklistStatus,
+    });
+  } catch (error) {
+    if (error instanceof IncidentTemplatePolicyError) {
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Closeout requirements are incomplete",
+        {
+          requirement_code: "TEMPLATE_NOT_FOUND",
+          incident_type: existing.incident_type.trim().toUpperCase(),
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+          invalid_evidence_refs: [],
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (!closeoutEvaluation.ready) {
+    throw new HttpError(
+      409,
+      "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+      "Closeout requirements are incomplete",
+      {
+        requirement_code: closeoutEvaluation.code,
+        incident_type: closeoutEvaluation.incident_type,
+        template_version: closeoutEvaluation.template_version,
+        missing_evidence_keys: closeoutEvaluation.missing_evidence_keys,
+        missing_checklist_keys: closeoutEvaluation.missing_checklist_keys,
+        invalid_evidence_refs: [],
+      },
+    );
+  }
+
+  await markEvidenceRowsImmutable(client, {
+    ticketId,
+    actor,
+    requestId,
+    evidenceRows: evidenceResult.rows,
+    reason: "closeout_verification",
+  });
+
+  const closeoutPacket = buildCloseoutPacketPayload({
+    ticket: existing,
+    closeoutCheck: closeoutEvaluation,
+    closeoutRequest: latestCloseoutRequest,
+    evidenceValidation,
+    evidence: evidenceResult.rows,
+    closureReason: overrideReason,
+    actor,
+  });
+  await insertCloseoutArtifact(client, {
+    ticketId,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    artifactType: "closeout_packet",
+    artifactName: `closeout-${ticketId}.json`,
+    artifactPayload: closeoutPacket,
+  });
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'CLOSED',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition({
+    ticketId,
+    beforeState: existing.state,
+    afterState: "CLOSED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/force-close",
+      requested_at: nowIso(),
+      request: body,
+      reason: overrideReason,
+      override_code: overrideCode,
+      approver_role: approverRole,
+      policy_override: true,
+      invoice_reversal: existing.state === "INVOICED",
+      closeout_check: closeoutEvaluation,
+      immutable_evidence_count: evidenceResult.rowCount,
+      closeout_packet_artifact_type: "closeout_packet",
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(ticket),
+      closeout_packet: {
+        artifact_type: "closeout_packet",
+        artifact_name: `closeout-${ticketId}.json`,
+      },
+    },
+  };
+}
+
+async function cancelTicketMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  ensureString(body.reason, "reason");
+  const reason = body.reason.trim();
+  const cancellationCode = normalizeOptionalString(body.cancellation_code, "cancellation_code");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/cancel", existing.state, body);
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'CANCELLED',
+        assigned_provider_id = NULL,
+        assigned_tech_id = NULL,
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition({
+    ticketId,
+    beforeState: existing.state,
+    afterState: "CANCELLED",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/cancel",
+      requested_at: nowIso(),
+      request: body,
+      reason,
+      cancellation_code: cancellationCode,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function forceHoldMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const holdReason = parseOptionalHoldReason(body.hold_reason);
+  const reason = normalizeOptionalString(body.reason, "reason");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/dispatch/force-hold", existing.state, body);
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'ON_HOLD',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition({
+    ticketId,
+    beforeState: existing.state,
+    afterState: "ON_HOLD",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/dispatch/force-hold",
+      requested_at: nowIso(),
+      request: body,
+      reason,
+      hold_reason: holdReason,
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function forceUnassignMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const reason = normalizeOptionalString(body.reason, "reason");
+  const reassignType = normalizeOptionalString(body.reassign_type, "reassign_type");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/dispatch/force-unassign", existing.state, body);
+
+  const shouldTransition = existing.state !== "SCHEDULED";
+  const update = await client.query(
+    shouldTransition
+      ? `
+          UPDATE tickets
+          SET
+            state = 'SCHEDULED',
+            assigned_provider_id = NULL,
+            assigned_tech_id = NULL,
+            version = version + 1
+          WHERE id = $1
+          RETURNING *
+        `
+      : `
+          UPDATE tickets
+          SET
+            assigned_provider_id = NULL,
+            assigned_tech_id = NULL,
+            version = version + 1
+          WHERE id = $1
+          RETURNING *
+        `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  if (shouldTransition) {
+    await insertAuditAndTransition({
+      ticketId,
+      beforeState: existing.state,
+      afterState: "SCHEDULED",
+      metrics,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/dispatch/force-unassign",
+        requested_at: nowIso(),
+        request: body,
+        reason,
+        reassign_type: reassignType,
+      },
+    });
+  } else {
+    await insertAuditEvent({
+      ticketId,
+      beforeState: existing.state,
+      afterState: existing.state,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/dispatch/force-unassign",
+        requested_at: nowIso(),
+        request: body,
+        reason,
+        reassign_type: reassignType,
+      },
+    });
+  }
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function reopenAfterVerificationMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  ensureString(body.reason, "reason");
+  const reason = body.reason.trim();
+  const reopenScope = normalizeOptionalString(body.reopen_scope, "reopen_scope");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed(
+    "/tickets/{ticketId}/closeout/reopen-after-verification",
+    existing.state,
+    body,
+  );
+
+  const update = await client.query(
+    `
+      UPDATE tickets
+      SET
+        state = 'IN_PROGRESS',
+        version = version + 1
+      WHERE id = $1
+      RETURNING *
+    `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  await insertAuditAndTransition({
+    ticketId,
+    beforeState: existing.state,
+    afterState: "IN_PROGRESS",
+    metrics,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/closeout/reopen-after-verification",
+      requested_at: nowIso(),
+      request: body,
+      reason,
+      reopen_scope: reopenScope,
+      invoice_reversal: existing.state === "INVOICED",
+    },
+  });
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function evidenceExceptionMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
+  ensureObject(body);
+  const exceptionReason = ensureString(body.exception_reason, "exception_reason");
+  const evidenceRefs = normalizeOptionalStringArray(body.evidence_refs, "evidence_refs");
+  const expiresAt = parseOptionalTimestamp(body.expires_at, "expires_at");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed(
+    "/tickets/{ticketId}/closeout/evidence-exception",
+    existing.state,
+    body,
+  );
+
+  await insertAuditEvent({
+    ticketId,
+    beforeState: existing.state,
+    afterState: existing.state,
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    toolName: actor.toolName,
+    requestId,
+    correlationId,
+    traceId,
+    payload: {
+      endpoint: "/tickets/{ticketId}/closeout/evidence-exception",
+      requested_at: nowIso(),
+      request: body,
+      exception_reason: exceptionReason,
+      evidence_refs: evidenceRefs,
+      expires_at: expiresAt,
+    },
+  });
+
+  return {
+    status: 200,
+    body: {
+      ticket: serializeTicket(existing),
+      exception_reason: exceptionReason,
+      expires_at: expiresAt,
+      evidence_refs: evidenceRefs,
+    },
+  };
+}
+
+async function manualBypassMutation(client, context) {
+  const { ticketId, body, actor, requestId, correlationId, traceId, metrics, authRuntime } =
+    context;
+  ensureObject(body);
+  const bypassRationale = ensureString(body.bypass_rationale, "bypass_rationale");
+  const targetTool = normalizeOptionalString(body.target_tool, "target_tool");
+
+  const existing = await getTicketForUpdate(client, ticketId);
+  assertTicketScope(authRuntime, actor, existing);
+  assertCommandStateAllowed("/tickets/{ticketId}/dispatch/manual-bypass", existing.state, body);
+
+  const shouldTransition = existing.state !== "COMPLETED_PENDING_VERIFICATION";
+  const update = await client.query(
+    shouldTransition
+      ? `
+          UPDATE tickets
+          SET
+            state = 'COMPLETED_PENDING_VERIFICATION',
+            version = version + 1
+          WHERE id = $1
+          RETURNING *
+        `
+      : `
+          UPDATE tickets
+          SET
+            version = version + 1
+          WHERE id = $1
+          RETURNING *
+        `,
+    [ticketId],
+  );
+  const ticket = update.rows[0];
+
+  if (shouldTransition) {
+    await insertAuditAndTransition({
+      ticketId,
+      beforeState: existing.state,
+      afterState: "COMPLETED_PENDING_VERIFICATION",
+      metrics,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/dispatch/manual-bypass",
+        requested_at: nowIso(),
+        request: body,
+        bypass_rationale: bypassRationale,
+        target_tool: targetTool,
+        derived_transitions: ["IN_PROGRESS->COMPLETED_PENDING_VERIFICATION"],
+      },
+    });
+  } else {
+    await insertAuditEvent({
+      ticketId,
+      beforeState: existing.state,
+      afterState: existing.state,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      toolName: actor.toolName,
+      requestId,
+      correlationId,
+      traceId,
+      payload: {
+        endpoint: "/tickets/{ticketId}/dispatch/manual-bypass",
+        requested_at: nowIso(),
+        request: body,
+        bypass_rationale: bypassRationale,
+        target_tool: targetTool,
+      },
+    });
+  }
+
+  return {
+    status: 200,
+    body: serializeTicket(ticket),
+  };
+}
+
+async function runDispatchHealthCheck(pool) {
+  const requiredTransitionRules = Object.freeze([
+    { from: "DISPATCHED", to: "ON_HOLD" },
+    { from: "ON_SITE", to: "ON_HOLD" },
+    { from: "IN_PROGRESS", to: "ON_HOLD" },
+    { from: "DISPATCHED", to: "SCHEDULED" },
+    { from: "ON_SITE", to: "SCHEDULED" },
+    { from: "IN_PROGRESS", to: "SCHEDULED" },
+    { from: "ON_HOLD", to: "SCHEDULED" },
+    { from: "COMPLETED_PENDING_VERIFICATION", to: "VERIFIED" },
+    { from: "VERIFIED", to: "CLOSED" },
+    { from: "COMPLETED_PENDING_VERIFICATION", to: "CLOSED" },
+    { from: "VERIFIED", to: "IN_PROGRESS" },
+    { from: "INVOICED", to: "IN_PROGRESS" },
+  ]);
+
+  const normalClosePolicy = getDispatchToolPolicy("ticket.close");
+  const forceClosePolicy = getDispatchToolPolicy("ticket.force_close");
+  const normalCloseAllowsCpvClose =
+    normalClosePolicy?.allowed_from_states?.includes("COMPLETED_PENDING_VERIFICATION") ?? false;
+  const forceCloseAllowsCpvClose =
+    forceClosePolicy?.allowed_from_states?.includes("COMPLETED_PENDING_VERIFICATION") ?? false;
+
+  const hasTransitionRule = (constraintDefinition, fromState, toState) => {
+    if (typeof constraintDefinition !== "string" || constraintDefinition.length === 0) {
+      return false;
+    }
+    const needle = `from_state='${fromState}'ANDto_state='${toState}'`;
+    return constraintDefinition.includes(needle);
+  };
+
+  const sleep = async (milliseconds) => {
+    await new Promise((resolve) => {
+      setTimeout(resolve, milliseconds);
+    });
+  };
+
+  let lastError = null;
+  for (let attempt = 0; attempt < HEALTH_CHECK_MAX_RETRIES; attempt += 1) {
+    try {
+      const response = await pool.query(
+        `
+          SELECT
+            (SELECT EXISTS(SELECT 1 FROM pg_database WHERE datistemplate = false))::bool AS db_query_ok,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'tickets'
+                  AND column_name = 'id'
+              )
+            ) AS has_tickets_table,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'evidence_items'
+                  AND column_name = 'is_immutable'
+              )
+            ) AS has_evidence_immutable_column,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'closeout_artifacts'
+                  AND column_name = 'artifact_type'
+              )
+            ) AS has_closeout_artifacts_table,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM pg_type
+                WHERE typname = 'ticket_state'
+              )
+            ) AS has_ticket_state_enum,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM pg_type t
+                JOIN pg_enum e ON e.enumtypid = t.oid
+                WHERE t.typname = 'ticket_state'
+                  AND e.enumlabel = 'CANCELLED'
+              )
+            ) AS has_cancelled_state_transition_label,
+            (
+              SELECT EXISTS(
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'chk_ticket_state_transition_valid'
+              )
+            ) AS has_state_transition_constraint,
+            (
+              SELECT regexp_replace(
+                pg_get_constraintdef(c.oid),
+                '\\s+',
+                '',
+                'g'
+              )
+              FROM pg_constraint c
+              WHERE c.conname = 'chk_ticket_state_transition_valid'
+              LIMIT 1
+            ) AS state_transition_constraint_definition,
+            (
+              SELECT conname
+              FROM pg_constraint
+              WHERE conname = 'chk_ticket_state_transition_valid'
+              LIMIT 1
+            ) AS state_transition_constraint_name
+        `,
+      );
+
+      const row = response.rows[0] ?? {};
+      const transitionConstraintDefinition = row.state_transition_constraint_definition ?? "";
+      const normalCloseTransitionFailure = normalCloseAllowsCpvClose ? "fail" : "pass";
+      const requiredTransitions = Object.fromEntries(
+        requiredTransitionRules.map((rule) => {
+          const key = `${rule.from}->${rule.to}`;
+          return [
+            key,
+            hasTransitionRule(transitionConstraintDefinition, rule.from, rule.to) ? "pass" : "fail",
+          ];
+        }),
+      );
+      const checks = {
+        database: {
+          name: "database_connectivity",
+          status: row.db_query_ok ? "pass" : "fail",
+        },
+        migration: {
+          tickets_table: row.has_tickets_table ? "pass" : "fail",
+          evidence_immutable_column: row.has_evidence_immutable_column ? "pass" : "fail",
+          closeout_artifacts_table: row.has_closeout_artifacts_table ? "pass" : "fail",
+          ticket_state_enum: row.has_ticket_state_enum ? "pass" : "fail",
+          cancelled_state: row.has_cancelled_state_transition_label ? "pass" : "fail",
+          transition_constraint: row.has_state_transition_constraint ? "pass" : "fail",
+          transition_constraint_name: row.state_transition_constraint_name ? "pass" : "fail",
+          ...requiredTransitions,
+          normal_close_contract_gating: normalCloseTransitionFailure,
+          force_close_tool_present: forceClosePolicy ? "pass" : "fail",
+          force_close_cpv_enabled:
+            forceClosePolicy &&
+            forceCloseAllowsCpvClose &&
+            forceClosePolicy.expected_to_state === "CLOSED"
+              ? "pass"
+              : "fail",
+        },
+      };
+
+      const failures = Object.entries(checks)
+        .flatMap(([, group]) => {
+          if (group && typeof group === "object" && !Array.isArray(group) && "name" in group) {
+            return group.status === "pass" ? [] : [group];
+          }
+          return Object.entries(group).flatMap(([name, status]) =>
+            status === "pass" ? [] : [{ name, status, status_code: "FAIL" }],
+          );
+        })
+        .filter(Boolean);
+
+      const hasTransitionFailures = Object.values(requiredTransitions).some(
+        (status) => status === "fail",
+      );
+      if (hasTransitionFailures && row.has_state_transition_constraint) {
+        checks.migration.transition_constraint = "warn";
+        for (const [transitionName, transitionStatus] of Object.entries(requiredTransitions)) {
+          if (transitionStatus === "fail") {
+            failures.push({
+              name: `required_transition:${transitionName}`,
+              status: "fail",
+              status_code: "FAIL",
+            });
+          }
+        }
+      }
+
+      const isHealthy = failures.length === 0 && !hasTransitionFailures;
+
+      return {
+        status: isHealthy ? "ok" : "unhealthy",
+        service: "dispatch-api",
+        generated_at: nowIso(),
+        runbook: RUNBOOK_PATHS.HEALTH_DB_MIGRATION,
+        checks,
+        failures,
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < HEALTH_CHECK_MAX_RETRIES) {
+        await sleep(250);
+      }
+    }
+  }
+
+  return {
+    status: "down",
+    service: "dispatch-api",
+    generated_at: nowIso(),
+    runbook: RUNBOOK_PATHS.HEALTH_DB_MIGRATION,
+    checks: {
+      database: { name: "database_connectivity", status: "fail" },
+    },
+    failures: [
+      {
+        name: "database_connectivity",
+        status: "fail",
+        reason: lastError?.message ?? "unreachable",
+      },
+    ],
   };
 }
 
@@ -6272,6 +7852,98 @@ function resolveRoute(method, pathname) {
     };
   }
 
+  const closeMatch = pathname.match(/^\/tickets\/([^/]+)\/close$/);
+  if (method === "POST" && closeMatch && ticketRouteRegex.test(closeMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/close",
+      handler: closeTicketMutation,
+      ticketId: closeMatch[1],
+    };
+  }
+
+  const forceCloseMatch = pathname.match(/^\/tickets\/([^/]+)\/force-close$/);
+  if (method === "POST" && forceCloseMatch && ticketRouteRegex.test(forceCloseMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/force-close",
+      handler: forceCloseTicketMutation,
+      ticketId: forceCloseMatch[1],
+    };
+  }
+
+  const cancelMatch = pathname.match(/^\/tickets\/([^/]+)\/cancel$/);
+  if (method === "POST" && cancelMatch && ticketRouteRegex.test(cancelMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/cancel",
+      handler: cancelTicketMutation,
+      ticketId: cancelMatch[1],
+    };
+  }
+
+  const forceHoldMatch = pathname.match(/^\/tickets\/([^/]+)\/dispatch\/force-hold$/);
+  if (method === "POST" && forceHoldMatch && ticketRouteRegex.test(forceHoldMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/dispatch/force-hold",
+      handler: forceHoldMutation,
+      ticketId: forceHoldMatch[1],
+    };
+  }
+
+  const forceUnassignMatch = pathname.match(/^\/tickets\/([^/]+)\/dispatch\/force-unassign$/);
+  if (method === "POST" && forceUnassignMatch && ticketRouteRegex.test(forceUnassignMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/dispatch/force-unassign",
+      handler: forceUnassignMutation,
+      ticketId: forceUnassignMatch[1],
+    };
+  }
+
+  const reopenAfterVerificationMatch = pathname.match(
+    /^\/tickets\/([^/]+)\/closeout\/reopen-after-verification$/,
+  );
+  if (
+    method === "POST" &&
+    reopenAfterVerificationMatch &&
+    ticketRouteRegex.test(reopenAfterVerificationMatch[1])
+  ) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/closeout/reopen-after-verification",
+      handler: reopenAfterVerificationMutation,
+      ticketId: reopenAfterVerificationMatch[1],
+    };
+  }
+
+  const evidenceExceptionMatch = pathname.match(
+    /^\/tickets\/([^/]+)\/closeout\/evidence-exception$/,
+  );
+  if (
+    method === "POST" &&
+    evidenceExceptionMatch &&
+    ticketRouteRegex.test(evidenceExceptionMatch[1])
+  ) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/closeout/evidence-exception",
+      handler: evidenceExceptionMutation,
+      ticketId: evidenceExceptionMatch[1],
+    };
+  }
+
+  const manualBypassMatch = pathname.match(/^\/tickets\/([^/]+)\/dispatch\/manual-bypass$/);
+  if (method === "POST" && manualBypassMatch && ticketRouteRegex.test(manualBypassMatch[1])) {
+    return {
+      kind: "command",
+      endpoint: "/tickets/{ticketId}/dispatch/manual-bypass",
+      handler: manualBypassMutation,
+      ticketId: manualBypassMatch[1],
+    };
+  }
+
   if (method === "POST" && pathname === "/ops/autonomy/pause") {
     return {
       kind: "command",
@@ -6322,6 +7994,18 @@ export function createDispatchApiServer(options = {}) {
   const objectStoreSchemes = parseObjectStoreSchemes(
     options.objectStoreSchemes ?? process.env.DISPATCH_OBJECT_STORE_SCHEMES,
   );
+  const evidenceHeadValidationEnabled = parseBooleanValue(
+    options.evidenceHeadValidationEnabled ?? process.env.DISPATCH_EVIDENCE_REQUIRE_HEAD,
+    process.env.NODE_ENV?.trim().toLowerCase() === "production",
+  );
+  const evidenceChecksumEnforced = parseBooleanValue(
+    options.evidenceChecksumEnforced ?? process.env.DISPATCH_EVIDENCE_REQUIRE_CHECKSUM,
+    false,
+  );
+  const evidenceHeadTimeoutMs = parsePositiveIntegerValue(
+    options.evidenceHeadTimeoutMs ?? process.env.DISPATCH_EVIDENCE_HEAD_TIMEOUT_MS,
+    DEFAULT_EVIDENCE_VERIFICATION_TIMEOUT_MS,
+  );
   const emitLog = (level, payload) => emitStructuredLog(logger, level, payload, { logSinkPath });
 
   if (metricsSinkPath && options.metrics) {
@@ -6371,12 +8055,10 @@ export function createDispatchApiServer(options = {}) {
     }
 
     if (route.kind === "health") {
-      sendJson(response, 200, {
-        status: "ok",
-        service: "dispatch-api",
-        now: nowIso(),
-      });
-      metrics.incrementRequest(requestMethod, route.endpoint, 200);
+      const healthCheck = await runDispatchHealthCheck(pool);
+      const statusCode = healthCheck.status === "ok" ? 200 : 503;
+      sendJson(response, statusCode, healthCheck);
+      metrics.incrementRequest(requestMethod, route.endpoint, statusCode);
       emitLog("info", {
         method: requestMethod,
         path: url.pathname,
@@ -6390,7 +8072,7 @@ export function createDispatchApiServer(options = {}) {
         tool_name: null,
         ticket_id: null,
         replay: false,
-        status: 200,
+        status: statusCode,
         duration_ms: Date.now() - requestStart,
       });
       return;
@@ -6627,6 +8309,9 @@ export function createDispatchApiServer(options = {}) {
           authRuntime,
           ticketId: route.ticketId,
           objectStoreSchemes,
+          evidenceHeadValidationEnabled: evidenceHeadValidationEnabled,
+          evidenceChecksumEnforced: evidenceChecksumEnforced,
+          evidenceHeadTimeoutMs,
         });
         sendJson(response, 200, packet);
         metrics.incrementRequest(requestMethod, route.endpoint, 200);
@@ -6740,29 +8425,83 @@ export function createDispatchApiServer(options = {}) {
       }
 
       const body = await parseJsonBody(request);
-      requestId = parseIdempotencyKey(request.headers);
       actor = authRuntime.resolveActor(request.headers, route);
+      const contract = getDispatchContractByRoute(route.endpoint);
+      if (!contract) {
+        throw new HttpError(500, "INTERNAL_ERROR", "Missing dispatch contract definition");
+      }
 
-      const result = await runWithIdempotency({
-        pool,
-        actorId: actor.actorId,
-        endpoint: route.endpoint,
-        requestId,
-        requestBody: body,
-        runMutation: async (client) =>
-          route.handler(client, {
-            body,
-            ticketId: route.ticketId,
-            actor,
-            requestId,
-            correlationId,
-            traceId,
-            metrics,
-            authRuntime,
-            objectStoreSchemes,
-            blindIntakePolicy,
-          }),
-      });
+      if (contract.idempotency_required) {
+        requestId = parseIdempotencyKey(request.headers);
+      }
+
+      const runCommandMutation = async () =>
+        runWithIdempotency({
+          pool,
+          actorId: actor.actorId,
+          endpoint: route.endpoint,
+          requestId,
+          requestBody: body,
+          runMutation: async (client) => {
+            await assertCommandContractConformance({
+              client,
+              endpoint: route.endpoint,
+              ticketId: route.ticketId,
+              actor,
+              body,
+              authRuntime,
+              requestId,
+            });
+
+            return route.handler(client, {
+              body,
+              ticketId: route.ticketId,
+              actor,
+              requestId,
+              correlationId,
+              traceId,
+              metrics,
+              authRuntime,
+              objectStoreSchemes,
+              blindIntakePolicy,
+              evidenceHeadValidationEnabled,
+              evidenceChecksumEnforced,
+              evidenceHeadTimeoutMs,
+            });
+          },
+        });
+
+      const runCommandHandler = async () => {
+        await assertCommandContractConformance({
+          client: pool,
+          endpoint: route.endpoint,
+          ticketId: route.ticketId,
+          actor,
+          body,
+          authRuntime,
+          requestId,
+        });
+
+        return route.handler(pool, {
+          body,
+          ticketId: route.ticketId,
+          actor,
+          requestId,
+          correlationId,
+          traceId,
+          metrics,
+          authRuntime,
+          objectStoreSchemes,
+          blindIntakePolicy,
+          evidenceHeadValidationEnabled,
+          evidenceChecksumEnforced,
+          evidenceHeadTimeoutMs,
+        });
+      };
+
+      const result = await (contract.idempotency_required
+        ? runCommandMutation()
+        : runCommandHandler());
 
       sendJson(response, result.status, result.body);
       metrics.incrementRequest(requestMethod, route.endpoint, result.status);

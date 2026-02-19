@@ -28,7 +28,7 @@
       "endpoint": "/tickets/4847e3f6-ecc7-4dbf-852a-ab1f2cc37f20/schedule/release",
       "method": "POST",
       "payload": {
-        "customer_confirmation_log": "{{hold_id}}"
+        "customer_confirmation_id": "{{hold_id}}"
       }
     }
   ],

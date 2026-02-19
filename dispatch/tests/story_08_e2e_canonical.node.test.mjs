@@ -47,11 +47,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -230,6 +226,8 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
     payload: {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "E2E canonical scenario indicates urgent bypass dispatch",
     },
   });
 
@@ -281,10 +279,7 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
       assert.ok(error instanceof DispatchBridgeError);
       assert.equal(error.status, 409);
       assert.equal(error.code, "DISPATCH_API_ERROR");
-      assert.equal(
-        error.details.dispatch_error.error.code,
-        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
-      );
+      assert.equal(error.details.dispatch_error.error.code, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
       assert.equal(
         error.details.dispatch_error.error.requirement_code,
         "MISSING_SIGNATURE_CONFIRMATION",
@@ -297,7 +292,10 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
   );
 
   assert.equal(psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`), "IN_PROGRESS");
-  assert.equal(psql(`SELECT count(*) FROM idempotency_keys WHERE request_id = '${requestIds.completeFail}';`), "0");
+  assert.equal(
+    psql(`SELECT count(*) FROM idempotency_keys WHERE request_id = '${requestIds.completeFail}';`),
+    "0",
+  );
 
   const firstEvidencePayload = {
     kind: "PHOTO",
@@ -412,7 +410,7 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
 
   const evidenceKeys = evidenceList.data.evidence
     .map((item) => item.metadata?.evidence_key)
-    .sort((left, right) => left.localeCompare(right));
+    .toSorted((left, right) => left.localeCompare(right));
   assert.deepEqual(evidenceKeys, [
     "note_risk_mitigation_and_customer_handoff",
     "photo_after_temporary_or_permanent_securement",
@@ -555,7 +553,9 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
     assert.equal(event.correlation_id, correlationId);
   }
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`),
+  );
   assert.equal(auditCount, timeline.data.events.length);
 
   const transitionCount = Number(
@@ -587,8 +587,5 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
   `)
     .split("\n")
     .filter(Boolean);
-  assert.deepEqual(checkInTransitions, [
-    "DISPATCHED->ON_SITE:1",
-    "ON_SITE->IN_PROGRESS:1",
-  ]);
+  assert.deepEqual(checkInTransitions, ["DISPATCHED->ON_SITE:1", "ON_SITE->IN_PROGRESS:1"]);
 });

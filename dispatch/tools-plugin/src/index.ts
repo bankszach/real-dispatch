@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { DISPATCH_CONTRACT } from "../../contracts/dispatch-contract.v1.ts";
 import { DISPATCH_TOOL_POLICIES } from "../../shared/authorization-policy.mjs";
 import {
   DISPATCH_CANONICAL_ROLES,
@@ -40,242 +41,31 @@ export default function register(api: {
   );
   const actorRoleSchema = Type.Union(actorRoleLiterals.map((role) => Type.Literal(role)));
   const uuidSchema = Type.String({ format: "uuid", minLength: 36, maxLength: 36 });
-  const isoDateTimeSchema = Type.String({ format: "date-time", minLength: 20 });
-  const nonNegativeNumberSchema = Type.Number({ minimum: 0 });
-  const prioritySchema = Type.Union([
-    Type.Literal("EMERGENCY"),
-    Type.Literal("URGENT"),
-    Type.Literal("ROUTINE"),
-  ]);
-  const confidencePercentSchema = Type.Number({ minimum: 0, maximum: 100 });
-  const schedulingWindowSchema = Type.Object(
-    {
-      start: isoDateTimeSchema,
-      end: isoDateTimeSchema,
-    },
-    { additionalProperties: true },
-  );
-  const checklistStatusSchema = Type.Object({}, { additionalProperties: true });
-  const locationSchema = Type.Object({}, { additionalProperties: true });
-  const metadataSchema = Type.Object({}, { additionalProperties: true });
-  const holdReasonSchema = Type.Union([
-    Type.Literal("CUSTOMER_PENDING"),
-    Type.Literal("CUSTOMER_UNREACHABLE"),
-    Type.Literal("CUSTOMER_CONFIRMATION_STALE"),
-  ]);
-  const resultSchema = Type.Union([Type.Literal("PASS"), Type.Literal("FAIL")]);
-  const evidenceDecisionSchema = Type.Union([Type.Literal("APPROVED"), Type.Literal("DENIED")]);
-  const dispatchModeSchema = Type.Union([
-    Type.Literal("STANDARD"),
-    Type.Literal("EMERGENCY_BYPASS"),
-  ]);
-  const approvalTypeSchema = Type.Union([Type.Literal("NTE_INCREASE"), Type.Literal("PROPOSAL")]);
-  const scheduleActionSchema = Type.Object(
-    {
-      hold_reason: holdReasonSchema,
-      confirmation_window: schedulingWindowSchema,
-    },
-    { additionalProperties: true },
-  );
-  const serviceTypeSchema = Type.String({ minLength: 1 });
-  const recommendationLimitSchema = Type.Integer({ minimum: 1, maximum: 20 });
-  const autonomyGlobalScopeSchema = Type.Object(
-    {
-      scope_type: Type.Optional(Type.Literal("GLOBAL")),
-      reason: Type.Optional(Type.String({ minLength: 1 })),
-    },
-    { additionalProperties: false },
-  );
-  const autonomyIncidentScopeSchema = Type.Object(
-    {
-      scope_type: Type.Literal("INCIDENT"),
-      incident_type: Type.String({ minLength: 1 }),
-      reason: Type.Optional(Type.String({ minLength: 1 })),
-    },
-    { additionalProperties: false },
-  );
-  const autonomyTicketScopeSchema = Type.Object(
-    {
-      scope_type: Type.Literal("TICKET"),
-      ticket_id: uuidSchema,
-      reason: Type.Optional(Type.String({ minLength: 1 })),
-    },
-    { additionalProperties: false },
-  );
-  const autonomyScopeSchema = Type.Union([
-    autonomyGlobalScopeSchema,
-    autonomyIncidentScopeSchema,
-    autonomyTicketScopeSchema,
-  ]);
   const unknownPayloadSchema = Type.Object({}, { additionalProperties: true });
-  const payloadSchemas = {
-    "ticket.create": Type.Object(
-      {
-        account_id: uuidSchema,
-        site_id: uuidSchema,
-        summary: Type.String({ minLength: 1 }),
-        description: Type.Optional(Type.String({ minLength: 1 })),
-        asset_id: Type.Optional(uuidSchema),
-        nte_cents: Type.Optional(nonNegativeNumberSchema),
-      },
-      { additionalProperties: true },
+
+  const contractPayloadSchemas = Object.freeze(
+    Object.fromEntries(
+      Object.entries(DISPATCH_CONTRACT).map(([toolName, contract]) => [
+        toolName,
+        contract.payload_schema,
+      ]),
     ),
-    "ticket.blind_intake": Type.Object(
-      {
-        account_id: uuidSchema,
-        site_id: uuidSchema,
-        summary: Type.String({ minLength: 1 }),
-        incident_type: Type.String({ minLength: 1 }),
-        customer_name: Type.String({ minLength: 1 }),
-        contact_phone: Type.Optional(Type.String({ minLength: 7 })),
-        contact_email: Type.Optional(Type.String({ format: "email" })),
-        priority: prioritySchema,
-        description: Type.Optional(Type.String({ minLength: 1 })),
-        nte_cents: Type.Optional(nonNegativeNumberSchema),
-        identity_confidence: confidencePercentSchema,
-        classification_confidence: confidencePercentSchema,
-        sop_handoff_acknowledged: Type.Optional(Type.Boolean()),
-        sop_handoff_prompt: Type.Optional(Type.String({ minLength: 1 })),
-      },
-      { additionalProperties: true },
-    ),
-    "ticket.triage": Type.Object(
-      {
-        priority: prioritySchema,
-        incident_type: Type.String({ minLength: 1 }),
-        nte_cents: Type.Optional(nonNegativeNumberSchema),
-        workflow_outcome: Type.Optional(
-          Type.Union([
-            Type.Literal("TRIAGED"),
-            Type.Literal("READY_TO_SCHEDULE"),
-            Type.Literal("APPROVAL_REQUIRED"),
-          ]),
-        ),
-        ready_to_schedule: Type.Optional(Type.Boolean()),
-        requires_approval: Type.Optional(Type.Boolean()),
-        approval_reason: Type.Optional(Type.String({ minLength: 1 })),
-        approval_amount_delta_cents: Type.Optional(nonNegativeNumberSchema),
-      },
-      { additionalProperties: true },
-    ),
-    "schedule.propose": Type.Object(
-      {
-        options: Type.Array(schedulingWindowSchema, { minItems: 1 }),
-      },
-      { additionalProperties: true },
-    ),
-    "schedule.confirm": Type.Object(
-      {
-        start: isoDateTimeSchema,
-        end: isoDateTimeSchema,
-      },
-      { additionalProperties: true },
-    ),
-    "assignment.dispatch": Type.Object(
-      {
-        tech_id: uuidSchema,
-        provider_id: Type.Optional(uuidSchema),
-        dispatch_mode: Type.Optional(dispatchModeSchema),
-        dispatch_rationale: Type.Optional(Type.String({ minLength: 1 })),
-        dispatch_confirmation: Type.Optional(Type.Boolean()),
-      },
-      { additionalProperties: true },
-    ),
-    "assignment.recommend": Type.Object(
-      {
-        service_type: serviceTypeSchema,
-        recommendation_limit: Type.Optional(recommendationLimitSchema),
-        preferred_window: Type.Optional(schedulingWindowSchema),
-      },
-      { additionalProperties: true },
-    ),
-    "schedule.hold": scheduleActionSchema,
-    "schedule.release": Type.Object(
-      {
-        confirmation_id: uuidSchema,
-      },
-      { additionalProperties: true },
-    ),
-    "schedule.rollback": Type.Object(
-      {
-        confirmation_id: uuidSchema,
-        reason: Type.Optional(Type.String({ minLength: 1 })),
-      },
-      { additionalProperties: true },
-    ),
-    "tech.check_in": Type.Object(
-      {
-        timestamp: isoDateTimeSchema,
-        location: Type.Optional(locationSchema),
-      },
-      { additionalProperties: true },
-    ),
-    "tech.request_change": Type.Object(
-      {
-        approval_type: approvalTypeSchema,
-        reason: Type.String({ minLength: 1 }),
-        amount_delta_cents: Type.Optional(nonNegativeNumberSchema),
-        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      },
-      { additionalProperties: true },
-    ),
-    "approval.decide": Type.Object(
-      {
-        approval_id: uuidSchema,
-        decision: evidenceDecisionSchema,
-        notes: Type.Optional(Type.String({ minLength: 1 })),
-      },
-      { additionalProperties: true },
-    ),
-    "closeout.add_evidence": Type.Object(
-      {
-        kind: Type.String({ minLength: 1 }),
-        uri: Type.String({ minLength: 1 }),
-        checksum: Type.Optional(Type.String({ minLength: 1 })),
-        evidence_key: Type.Optional(Type.String({ minLength: 1 })),
-        metadata: Type.Optional(metadataSchema),
-      },
-      { additionalProperties: true },
-    ),
-    "closeout.candidate": Type.Object(
-      {
-        checklist_status: checklistStatusSchema,
-        no_signature_reason: Type.Optional(Type.String({ minLength: 1 })),
-        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      },
-      { additionalProperties: true },
-    ),
-    "tech.complete": Type.Object(
-      {
-        checklist_status: checklistStatusSchema,
-        no_signature_reason: Type.Optional(Type.String({ minLength: 1 })),
-        evidence_refs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      },
-      { additionalProperties: true },
-    ),
-    "qa.verify": Type.Object(
-      {
-        timestamp: isoDateTimeSchema,
-        result: resultSchema,
-        notes: Type.Optional(Type.String({ minLength: 1 })),
-      },
-      { additionalProperties: true },
-    ),
-    "billing.generate_invoice": Type.Object({}, { additionalProperties: true }),
-    "ops.autonomy.pause": autonomyScopeSchema,
-    "ops.autonomy.rollback": autonomyScopeSchema,
-    "ops.autonomy.state": Type.Object({}, { additionalProperties: true }),
-    "ops.autonomy.replay": Type.Object({}, { additionalProperties: true }),
-  } as const;
-  const commonEnvelopeFields = {
-    actor_id: Type.String({ minLength: 1 }),
-    actor_role: Type.Optional(actorRoleSchema),
-    actor_type: Type.Optional(actorTypeSchema),
-    request_id: Type.Optional(Type.String({ format: "uuid" })),
-    correlation_id: Type.Optional(Type.String({ minLength: 1 })),
-    trace_id: Type.Optional(Type.String({ minLength: 1 })),
-    trace_parent: Type.Optional(Type.String({ minLength: 1 })),
-    trace_state: Type.Optional(Type.String({ minLength: 1 })),
+  );
+
+  const buildToolParameters = (
+    policy: { mutating: boolean; requires_ticket_id: boolean },
+    toolName: string,
+  ) => {
+    const properties: Record<string, unknown> = {};
+    if (policy.requires_ticket_id) {
+      properties.ticket_id = uuidSchema;
+    }
+    if (policy.mutating) {
+      properties.payload =
+        contractPayloadSchemas[toolName as keyof typeof contractPayloadSchemas] ??
+        unknownPayloadSchema;
+    }
+    return Type.Object(properties, { additionalProperties: false });
   };
 
   const toolDescriptions = {
@@ -301,29 +91,7 @@ export default function register(api: {
       "Read technician packet, timeline, evidence, and closeout gate status via dispatch-api.",
   } as const;
 
-  const buildToolParameters = (
-    policy: { mutating: boolean; requires_ticket_id: boolean },
-    toolName: string,
-  ) => {
-    const properties: Record<string, unknown> = { ...commonEnvelopeFields };
-    if (policy.requires_ticket_id) {
-      properties.ticket_id = uuidSchema;
-    }
-    if (policy.mutating) {
-      properties.payload =
-        payloadSchemas[toolName as keyof typeof payloadSchemas] ?? unknownPayloadSchema;
-    }
-    return Type.Object(properties, { additionalProperties: false });
-  };
-
   const asOpenAIFriendlyToolName = (toolName: string) => toolName.replace(/\./g, "_");
-
-  type ToolDefinition = {
-    name: string;
-    dispatchName: string;
-    description: string;
-    parameters: unknown;
-  };
 
   const toolDefinitions = Object.values(DISPATCH_TOOL_POLICIES)
     .filter((policy) => policy.tool_name !== "assignment.recommend")
@@ -336,7 +104,12 @@ export default function register(api: {
             toolDescriptions[policy.tool_name as keyof typeof toolDescriptions] ??
             `Invoke ${policy.tool_name} via dispatch-api.`,
           parameters: buildToolParameters(policy, policy.tool_name),
-        }) as ToolDefinition,
+        }) as {
+          name: string;
+          dispatchName: string;
+          description: string;
+          parameters: unknown;
+        },
     )
     .toSorted((left, right) => left.name.localeCompare(right.name));
 
@@ -350,8 +123,6 @@ export default function register(api: {
     typeof cfg.baseUrl === "string" && cfg.baseUrl.trim() !== "" ? cfg.baseUrl.trim() : null;
   const token =
     typeof cfg.token === "string" && cfg.token.trim() !== "" ? cfg.token.trim() : undefined;
-  const timeoutMs =
-    typeof cfg.timeoutMs === "number" && Number.isFinite(cfg.timeoutMs) ? cfg.timeoutMs : 10_000;
 
   api.registerTool(
     {
@@ -430,7 +201,6 @@ export default function register(api: {
             const result = await invokeDispatchAction({
               baseUrl,
               token,
-              timeoutMs,
               logger: api.logger,
               toolName: dispatchName,
               actorId,

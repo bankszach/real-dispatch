@@ -58,10 +58,13 @@ services:
     build:
       context: ../../..
       dockerfile: Dockerfile
+    profiles:
+      - experimental
     restart: unless-stopped
     environment:
       DISPATCH_DATABASE_URL: ${DISPATCH_DATABASE_URL:-postgres://dispatch:dispatch@postgres:5432/dispatch}
       DISPATCH_API_URL: ${DISPATCH_API_URL:-http://dispatch-api:8080}
+      DISPATCH_WORKER_ENABLED: ${DISPATCH_WORKER_ENABLED:-false}
     depends_on:
       dispatch-api:
         condition: service_started

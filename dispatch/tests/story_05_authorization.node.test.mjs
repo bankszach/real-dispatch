@@ -35,11 +35,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -199,7 +195,9 @@ test("server rejects tool mismatch for endpoint fail closed", async () => {
   assert.equal(mismatchedToolCall.body.error.code, "TOOL_NOT_ALLOWED");
 
   const blockedSummaryCount = Number(
-    psql("SELECT count(*) FROM tickets WHERE summary = 'Story 05 should be blocked by tool mismatch';"),
+    psql(
+      "SELECT count(*) FROM tickets WHERE summary = 'Story 05 should be blocked by tool mismatch';",
+    ),
   );
   assert.equal(blockedSummaryCount, 0);
 });
@@ -241,7 +239,9 @@ test("server rejects forbidden role and preserves ticket state", async () => {
   assert.equal(forbiddenTriage.body.error.code, "FORBIDDEN");
   assert.equal(psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`), "NEW");
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`),
+  );
   assert.equal(auditCount, 1);
 });
 
@@ -275,6 +275,8 @@ test("server rejects invalid state context deterministically", async () => {
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "Validation fixture requires explicit emergency bypass rationale",
     },
   );
 
@@ -283,13 +285,15 @@ test("server rejects invalid state context deterministically", async () => {
   assert.equal(invalidDispatch.body.error.from_state, "NEW");
   assert.equal(invalidDispatch.body.error.to_state, "DISPATCHED");
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`),
+  );
   assert.equal(auditCount, 1);
 });
 
 test("bridge and api policy maps remain synchronized", () => {
-  const sharedToolNames = Object.keys(DISPATCH_TOOL_POLICIES).sort();
-  const bridgeToolNames = Object.keys(TOOL_SPECS).sort();
+  const sharedToolNames = Object.keys(DISPATCH_TOOL_POLICIES).toSorted();
+  const bridgeToolNames = Object.keys(TOOL_SPECS).toSorted();
   assert.deepEqual(bridgeToolNames, sharedToolNames);
 
   for (const toolName of sharedToolNames) {

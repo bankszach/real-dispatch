@@ -23,6 +23,9 @@ Runbook index:
 - `glz_12_autonomy_rollout_controls.md`
 - `blind_intake_guardrails.md`
 - `mvp_06_on_call_drill.md`
+- `health_db_migration.md`
+- `db_backup.md`
+- `db_wal_archive_recovery.md`
 - `mvp_08_pilot_cutover_readiness.md`
 - `mvp_launch_checkpoint.md` (recoverable startup/smoke-test snapshot)
 - `sprint_g2_scheduling_and_commitment.md`

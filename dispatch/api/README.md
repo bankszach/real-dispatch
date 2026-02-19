@@ -32,6 +32,13 @@ node dispatch/api/src/server.mjs
 - `POST /tickets/{ticketId}/closeout/candidate`
 - `POST /tickets/{ticketId}/qa/verify`
 - `POST /tickets/{ticketId}/billing/generate-invoice`
+- `POST /tickets/{ticketId}/close`
+- `POST /tickets/{ticketId}/cancel`
+- `POST /tickets/{ticketId}/dispatch/force-hold`
+- `POST /tickets/{ticketId}/dispatch/force-unassign`
+- `POST /tickets/{ticketId}/closeout/reopen-after-verification`
+- `POST /tickets/{ticketId}/closeout/evidence-exception`
+- `POST /tickets/{ticketId}/dispatch/manual-bypass`
 - `POST /ops/autonomy/pause`
 - `POST /ops/autonomy/rollback`
 
@@ -46,6 +53,7 @@ node dispatch/api/src/server.mjs
 - `GET /ops/alerts`
 - `GET /ops/autonomy/state`
 - `GET /ops/autonomy/replay/{ticketId}`
+- `GET /health`
 
 Each command endpoint requires:
 
@@ -69,6 +77,7 @@ UX read endpoints (`GET /ux/dispatcher/cockpit`, `GET /ux/technician/job-packet/
 - ticket mutation + audit event + state transition row on success
 - structured request logs for success/error paths with `request_id`, `correlation_id`, and `trace_id`
 - in-memory metrics snapshot export for requests/errors/transitions (`GET /metrics`)
+- `GET /health` with DB + migration checks; returns `200` when healthy and `503` when unhealthy.
 - optional durable observability sinks:
   - `DISPATCH_LOG_SINK_PATH` (append-only NDJSON request logs)
   - `DISPATCH_METRICS_SINK_PATH` (latest metrics snapshot JSON)

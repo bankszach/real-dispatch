@@ -46,11 +46,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -295,6 +291,9 @@ test("mvp-06 alerts detect key failure modes and durable sinks persist outputs",
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale:
+        "Escalated dispatch needed to preserve continuity during closeout testing",
     },
   );
   assert.equal(dispatchCloseout.status, 200);
@@ -390,7 +389,7 @@ test("mvp-06 alerts detect key failure modes and durable sinks persist outputs",
   });
   assert.equal(alertsResponse.status, 200);
   const alerts = alertsResponse.body.alerts;
-  const alertCodes = alerts.map((entry) => entry.code).sort();
+  const alertCodes = alerts.map((entry) => entry.code).toSorted();
   assert.deepEqual(alertCodes, [
     "AUTH_POLICY_FAILURE_SPIKE",
     "COMPLETION_REJECTION_SPIKE",

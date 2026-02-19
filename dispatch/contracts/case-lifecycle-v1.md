@@ -13,17 +13,17 @@ dispatch-api enforcement states.
 - onsite
 - closeout_pending
 - closed
-- canceled
+- cancelled
 
 Legal phase transitions:
 
-- new -> triaged | schedulable | canceled
-- triaged -> schedulable | canceled
-- schedulable -> scheduled | canceled
-- scheduled -> scheduled | dispatched | canceled
+- new -> triaged | schedulable | cancelled
+- triaged -> schedulable | cancelled
+- schedulable -> scheduled | cancelled
+- scheduled -> scheduled | dispatched | cancelled
 - dispatched -> onsite
 - onsite -> closeout_pending
-- closeout_pending -> closed
+- closeout_pending -> closed | cancelled
 
 ## 2) dispatch-api Enforcement States
 
@@ -42,20 +42,21 @@ Legal phase transitions:
 - VERIFIED
 - INVOICED
 - CLOSED
+- CANCELLED
 
 ## 3) Phase-to-State Mapping
 
-| Phase | Enforcement states |
-|---|---|
-| `new` | `NEW`, `NEEDS_INFO` |
-| `triaged` | `TRIAGED`, `APPROVAL_REQUIRED` |
-| `schedulable` | `READY_TO_SCHEDULE`, `SCHEDULE_PROPOSED` |
-| `scheduled` | `SCHEDULED` |
-| `dispatched` | `DISPATCHED` |
-| `onsite` | `ON_SITE`, `IN_PROGRESS`, `ON_HOLD` |
+| Phase              | Enforcement states                                       |
+| ------------------ | -------------------------------------------------------- |
+| `new`              | `NEW`, `NEEDS_INFO`                                      |
+| `triaged`          | `TRIAGED`, `APPROVAL_REQUIRED`                           |
+| `schedulable`      | `READY_TO_SCHEDULE`, `SCHEDULE_PROPOSED`                 |
+| `scheduled`        | `SCHEDULED`                                              |
+| `dispatched`       | `DISPATCHED`                                             |
+| `onsite`           | `ON_SITE`, `IN_PROGRESS`, `ON_HOLD`                      |
 | `closeout_pending` | `COMPLETED_PENDING_VERIFICATION`, `VERIFIED`, `INVOICED` |
-| `closed` | `CLOSED` |
-| `canceled` | Currently represented as `CLOSED` with cancellation reason metadata until a dedicated cancel state is introduced. |
+| `closed`           | `CLOSED`                                                 |
+| `cancelled`        | `CANCELLED`                                              |
 
 ## 4) Closure Gate
 

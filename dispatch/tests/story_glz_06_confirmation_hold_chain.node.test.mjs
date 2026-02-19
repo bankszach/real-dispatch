@@ -358,7 +358,7 @@ test("hold + release restores schedule state and records immutable audit/timelin
       correlationId: `corr-glz06-release-${scheduled.ticketId}`,
     }),
     {
-      customer_confirmation_log: hold.body.hold_id,
+      customer_confirmation_id: hold.body.hold_id,
     },
   );
   assert.equal(release.status, 200);
@@ -576,7 +576,7 @@ test("release rejects stale confirmation windows with explicit correlation and p
       correlationId: `corr-glz06-stale-release-${scheduled.ticketId}`,
     }),
     {
-      customer_confirmation_log: hold.body.hold_id,
+      customer_confirmation_id: hold.body.hold_id,
     },
   );
   assert.equal(staleRelease.status, 409);
@@ -659,7 +659,7 @@ test("hold lifecycle commands are blocked outside pending-confirmation states", 
       correlationId: `corr-glz06-blocked-release-${triage.body.id}`,
     }),
     {
-      customer_confirmation_log: "00000000-0000-4000-8000-000000000999",
+      customer_confirmation_id: "00000000-0000-4000-8000-000000000999",
     },
   );
   assert.equal(releaseBlocked.status, 409);

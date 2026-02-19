@@ -30,11 +30,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -244,6 +240,8 @@ test("timeline returns ordered complete audit events for each successful mutatio
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "Urgent timeline dispatch bypass while validating state history",
     },
   );
   assert.equal(dispatch.status, 200);
@@ -258,7 +256,9 @@ test("timeline returns ordered complete audit events for each successful mutatio
   assert.equal(Array.isArray(timeline.body.events), true);
   assert.equal(timeline.body.events.length, 3);
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${ticketId}';`),
+  );
   assert.equal(timeline.body.events.length, auditCount);
 
   assertTimelineOrdered(timeline.body.events);
@@ -293,7 +293,10 @@ test("timeline returns ordered complete audit events for each successful mutatio
     assert.notEqual(event.actor_id.trim(), "");
     assert.equal(typeof event.tool_name, "string");
     assert.notEqual(event.tool_name.trim(), "");
-    assert.match(event.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    assert.match(
+      event.request_id,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
     assert.equal(typeof event.correlation_id, "string");
     assert.notEqual(event.correlation_id.trim(), "");
     assert.equal(event.trace_id, null);

@@ -9,6 +9,7 @@ const identity = process.env.DISPATCH_WORKER_IDENTITY || "dispatch-worker";
 const actorId = process.env.DISPATCH_WORKER_ACTOR_ID || `${identity}-system`;
 const actorRole = process.env.DISPATCH_WORKER_ACTOR_ROLE || "dispatcher";
 const actorType = process.env.DISPATCH_WORKER_ACTOR_TYPE || "SERVICE";
+const workerEnabled = parseBoolean(process.env.DISPATCH_WORKER_ENABLED, false);
 const heartbeatMs = parsePositiveInt(process.env.DISPATCH_WORKER_HEARTBEAT_MS, DEFAULT_LOOP_MS);
 const loopMs = parsePositiveInt(process.env.DISPATCH_WORKER_LOOP_MS, DEFAULT_LOOP_MS);
 const requestTimeoutMs = parsePositiveInt(
@@ -42,6 +43,17 @@ function parsePositiveInt(value, fallback) {
     return fallback;
   }
   return parsed;
+}
+
+function parseBoolean(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(normalized);
 }
 
 function normalizeBaseUrl(rawUrl) {
@@ -270,7 +282,7 @@ async function recommendAndDispatch(ticket) {
   const dispatchPayload = {
     tech_id: topTech.tech_id,
     recommendation_snapshot_id: recommendation.snapshot_id || null,
-    dispatch_mode: "WORKER_AUTO",
+    dispatch_mode: "STANDARD",
   };
 
   try {
@@ -457,6 +469,17 @@ async function runWorkerLoop() {
     errors: metrics.errors,
     last_error: metrics.last_error,
   });
+}
+
+if (!workerEnabled) {
+  logEvent("warn", "worker.disabled", {
+    reason: "DISPATCH_WORKER_ENABLED is false",
+    identity,
+    actor_id: actorId,
+    actor_role: actorRole,
+    actor_type: actorType,
+  });
+  process.exit(0);
 }
 
 runWorkerLoop().catch((error) => {

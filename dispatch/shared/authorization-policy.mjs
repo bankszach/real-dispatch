@@ -1,3 +1,5 @@
+import { DISPATCH_CONTRACT } from "../contracts/dispatch-contract.v1.ts";
+
 export const DISPATCH_CANONICAL_ROLES = Object.freeze({
   DISPATCHER: "dispatcher",
   TECH: "technician",
@@ -29,299 +31,13 @@ export const DISPATCH_ROLE_ALIASES = Object.freeze({
 
 const DISPATCH_CANONICAL_ROLE_SET = new Set(Object.values(DISPATCH_CANONICAL_ROLES));
 
-export function normalizeDispatchRole(value, sourceLabel = "role") {
-  if (typeof value !== "string") {
-    throw new Error(`${sourceLabel} must be a string`);
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "") {
-    throw new Error(`${sourceLabel} is required`);
-  }
-
-  const canonicalRole = DISPATCH_ROLE_ALIASES[normalized] ?? normalized;
-  if (!DISPATCH_CANONICAL_ROLE_SET.has(canonicalRole)) {
-    const allowed = [...DISPATCH_CANONICAL_ROLE_SET].toSorted().join(", ");
-    throw new Error(
-      `${sourceLabel} '${value}' is not a recognized role. Allowed roles: ${allowed}`,
-    );
-  }
-
-  return canonicalRole;
+function routeNeedsTicket(route) {
+  return typeof route === "string" && route.includes("{ticketId}");
 }
 
-const TOOL_POLICIES_RAW = {
-  "ticket.create": {
-    tool_name: "ticket.create",
-    method: "POST",
-    endpoint: "/tickets",
-    mutating: true,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher", "agent"],
-    expected_to_state: "NEW",
-    allowed_from_states: null,
-  },
-  "ticket.blind_intake": {
-    tool_name: "ticket.blind_intake",
-    method: "POST",
-    endpoint: "/tickets/intake",
-    mutating: true,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher", "agent"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "ticket.triage": {
-    tool_name: "ticket.triage",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/triage",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent"],
-    expected_to_state: "TRIAGED",
-    allowed_from_states: ["NEW", "NEEDS_INFO", "TRIAGED"],
-  },
-  "schedule.propose": {
-    tool_name: "schedule.propose",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/propose",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent"],
-    expected_to_state: "SCHEDULE_PROPOSED",
-    allowed_from_states: ["READY_TO_SCHEDULE"],
-  },
-  "schedule.confirm": {
-    tool_name: "schedule.confirm",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/confirm",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "customer"],
-    expected_to_state: "SCHEDULED",
-    allowed_from_states: ["SCHEDULE_PROPOSED"],
-  },
-  "assignment.dispatch": {
-    tool_name: "assignment.dispatch",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/assignment/dispatch",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: "DISPATCHED",
-    allowed_from_states: ["SCHEDULED"],
-  },
-  "assignment.recommend": {
-    tool_name: "assignment.recommend",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/assignment/recommend",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent"],
-    expected_to_state: null,
-    allowed_from_states: ["SCHEDULED", "READY_TO_SCHEDULE", "SCHEDULE_PROPOSED"],
-  },
-  "schedule.hold": {
-    tool_name: "schedule.hold",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/hold",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: ["SCHEDULE_PROPOSED", "SCHEDULED"],
-  },
-  "schedule.release": {
-    tool_name: "schedule.release",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/release",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: ["PENDING_CUSTOMER_CONFIRMATION"],
-  },
-  "schedule.rollback": {
-    tool_name: "schedule.rollback",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/schedule/rollback",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: ["PENDING_CUSTOMER_CONFIRMATION"],
-  },
-  "tech.check_in": {
-    tool_name: "tech.check_in",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/tech/check-in",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["technician", "dispatcher"],
-    expected_to_state: "IN_PROGRESS",
-    allowed_from_states: ["DISPATCHED"],
-  },
-  "tech.request_change": {
-    tool_name: "tech.request_change",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/tech/request-change",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["technician"],
-    expected_to_state: "APPROVAL_REQUIRED",
-    allowed_from_states: ["IN_PROGRESS"],
-  },
-  "approval.decide": {
-    tool_name: "approval.decide",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/approval/decide",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["approver", "dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: ["APPROVAL_REQUIRED"],
-  },
-  "closeout.add_evidence": {
-    tool_name: "closeout.add_evidence",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/evidence",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent", "technician"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "closeout.candidate": {
-    tool_name: "closeout.candidate",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/closeout/candidate",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent", "technician"],
-    expected_to_state: "COMPLETED_PENDING_VERIFICATION",
-    allowed_from_states: ["IN_PROGRESS"],
-  },
-  "ops.autonomy.pause": {
-    tool_name: "ops.autonomy.pause",
-    method: "POST",
-    endpoint: "/ops/autonomy/pause",
-    mutating: true,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "ops.autonomy.rollback": {
-    tool_name: "ops.autonomy.rollback",
-    method: "POST",
-    endpoint: "/ops/autonomy/rollback",
-    mutating: true,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "ops.autonomy.state": {
-    tool_name: "ops.autonomy.state",
-    method: "GET",
-    endpoint: "/ops/autonomy/state",
-    mutating: false,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "ops.autonomy.replay": {
-    tool_name: "ops.autonomy.replay",
-    method: "GET",
-    endpoint: "/ops/autonomy/replay/{ticketId}",
-    mutating: false,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "tech.complete": {
-    tool_name: "tech.complete",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/tech/complete",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "technician"],
-    expected_to_state: "COMPLETED_PENDING_VERIFICATION",
-    allowed_from_states: ["IN_PROGRESS"],
-  },
-  "qa.verify": {
-    tool_name: "qa.verify",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/qa/verify",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["qa", "dispatcher"],
-    expected_to_state: "VERIFIED",
-    allowed_from_states: ["COMPLETED_PENDING_VERIFICATION"],
-  },
-  "billing.generate_invoice": {
-    tool_name: "billing.generate_invoice",
-    method: "POST",
-    endpoint: "/tickets/{ticketId}/billing/generate-invoice",
-    mutating: true,
-    requires_ticket_id: true,
-    allowed_roles: ["finance"],
-    expected_to_state: "INVOICED",
-    allowed_from_states: ["VERIFIED"],
-  },
-  "ticket.get": {
-    tool_name: "ticket.get",
-    method: "GET",
-    endpoint: "/tickets/{ticketId}",
-    mutating: false,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent", "customer", "technician", "qa", "approver", "finance"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "closeout.list_evidence": {
-    tool_name: "closeout.list_evidence",
-    method: "GET",
-    endpoint: "/tickets/{ticketId}/evidence",
-    mutating: false,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent", "technician", "qa", "approver", "finance"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "ticket.timeline": {
-    tool_name: "ticket.timeline",
-    method: "GET",
-    endpoint: "/tickets/{ticketId}/timeline",
-    mutating: false,
-    requires_ticket_id: true,
-    allowed_roles: ["dispatcher", "agent", "customer", "technician", "qa", "approver", "finance"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "dispatcher.cockpit": {
-    tool_name: "dispatcher.cockpit",
-    method: "GET",
-    endpoint: "/ux/dispatcher/cockpit",
-    mutating: false,
-    requires_ticket_id: false,
-    allowed_roles: ["dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-  "tech.job_packet": {
-    tool_name: "tech.job_packet",
-    method: "GET",
-    endpoint: "/ux/technician/job-packet/{ticketId}",
-    mutating: false,
-    requires_ticket_id: true,
-    allowed_roles: ["technician", "dispatcher"],
-    expected_to_state: null,
-    allowed_from_states: null,
-  },
-};
+function normalizeHttpMethod(method) {
+  return typeof method === "string" ? method.toUpperCase() : "";
+}
 
 function freezePolicyMap(map) {
   const entries = Object.entries(map).map(([key, value]) => {
@@ -331,6 +47,9 @@ function freezePolicyMap(map) {
       allowed_from_states: Array.isArray(value.allowed_from_states)
         ? Object.freeze([...(value.allowed_from_states ?? [])])
         : null,
+      payload_schema: value.payload_schema,
+      bypass_requirements: value.bypass_requirements,
+      idempotency_required: Boolean(value.idempotency_required),
     };
     return [key, Object.freeze(copy)];
   });
@@ -353,6 +72,7 @@ function buildEndpointPolicyMap(toolPolicies) {
       allowed_roles: new Set(),
       expected_to_state: policy.expected_to_state,
       allowed_from_states: policy.allowed_from_states,
+      idempotency_required: policy.idempotency_required,
     };
 
     current.allowed_tool_names.push(policy.tool_name);
@@ -373,11 +93,32 @@ function buildEndpointPolicyMap(toolPolicies) {
       allowed_roles: Object.freeze(Array.from(value.allowed_roles)),
       expected_to_state: value.expected_to_state,
       allowed_from_states: value.allowed_from_states,
+      idempotency_required: value.idempotency_required,
     }),
   ]);
 
   return Object.freeze(Object.fromEntries(entries));
 }
+
+const TOOL_POLICIES_RAW = (() => {
+  const generated = {};
+  for (const [toolName, contract] of Object.entries(DISPATCH_CONTRACT)) {
+    generated[toolName] = {
+      tool_name: contract.tool_name,
+      method: contract.http_method,
+      endpoint: contract.route,
+      mutating: normalizeHttpMethod(contract.http_method) !== "GET",
+      requires_ticket_id: routeNeedsTicket(contract.route),
+      allowed_roles: [...contract.allowed_roles],
+      expected_to_state: contract.resulting_state,
+      allowed_from_states: contract.allowed_from_states,
+      idempotency_required: contract.idempotency_required,
+      payload_schema: contract.payload_schema,
+      bypass_requirements: contract.bypass_requirements,
+    };
+  }
+  return Object.freeze(generated);
+})();
 
 export const DISPATCH_TOOL_POLICIES = freezePolicyMap(TOOL_POLICIES_RAW);
 
@@ -411,4 +152,37 @@ export function isToolAllowedForCommandEndpoint(endpoint, toolName) {
     return false;
   }
   return policy.allowed_tool_names.includes(toolName);
+}
+
+export function getContractToolPolicyByEndpoint(endpoint) {
+  if (typeof endpoint !== "string") {
+    return null;
+  }
+  for (const policy of Object.values(DISPATCH_TOOL_POLICIES)) {
+    if (policy.endpoint === endpoint) {
+      return policy;
+    }
+  }
+  return null;
+}
+
+export function normalizeDispatchRole(value, sourceLabel = "role") {
+  if (typeof value !== "string") {
+    throw new Error(`${sourceLabel} must be a string`);
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") {
+    throw new Error(`${sourceLabel} is required`);
+  }
+
+  const canonicalRole = DISPATCH_ROLE_ALIASES[normalized] ?? normalized;
+  if (!DISPATCH_CANONICAL_ROLE_SET.has(canonicalRole)) {
+    const allowed = [...DISPATCH_CANONICAL_ROLE_SET].toSorted().join(", ");
+    throw new Error(
+      `${sourceLabel} '${value}' is not a recognized role. Allowed roles: ${allowed}`,
+    );
+  }
+
+  return canonicalRole;
 }

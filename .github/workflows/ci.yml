@@ -250,6 +250,9 @@ jobs:
           - runtime: node
             task: dispatch-gates
             command: pnpm dispatch:test:ci
+          - runtime: node
+            task: dispatch-contract-verify
+            command: pnpm dispatch:contract:verify
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts

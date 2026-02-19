@@ -50,6 +50,7 @@
     "dispatch:api:start": "node dispatch/api/src/server.mjs",
     "dispatch:bootstrap": "node dispatch/ops/bootstrap-dispatch-stack.mjs",
     "dispatch:bootstrap:stack": "docker compose --env-file .env -f dispatch/ops/docker/docker-compose.dispatch.yml exec -T dispatch-api node dispatch/ops/bootstrap-dispatch-stack.mjs",
+    "dispatch:contract:verify": "node --import tsx scripts/dispatch-contract-verify.ts",
     "dispatch:demo": "node dispatch/ops/demo-stack.mjs",
     "dispatch:demo:ci": "node --input-type=module -e \"process.env.DISPATCH_DEMO_KEEP_STACK='0'; import('./dispatch/ops/demo-stack.mjs').catch((error) => { console.error(error); process.exit(1); });\"",
     "dispatch:demo:shadow": "node dispatch/ops/demo-shadow-proposal.mjs",

@@ -239,6 +239,9 @@ test("bridge forwards allowlisted tools and propagates request + correlation int
     payload: {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale:
+        "Tool bridge exercise requires emergency dispatch rationale and confirmation",
     },
   });
   assert.equal(dispatch.status, 200);
@@ -373,6 +376,9 @@ test("bridge enforces role allowlist before mutation", async () => {
       payload: {
         tech_id: techId,
         dispatch_mode: "EMERGENCY_BYPASS",
+        dispatch_confirmation: true,
+        dispatch_rationale:
+          "Tool bridge exercise requires emergency dispatch rationale and confirmation",
       },
     }),
     (error) => {

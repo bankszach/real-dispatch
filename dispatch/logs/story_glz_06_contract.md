@@ -31,7 +31,7 @@ Behavior:
 
 Required payload:
 
-- `customer_confirmation_log` (string)
+- `customer_confirmation_id` (string)
 
 Behavior:
 

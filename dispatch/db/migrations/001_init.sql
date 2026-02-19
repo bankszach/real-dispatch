@@ -26,8 +26,18 @@ BEGIN
       'COMPLETED_PENDING_VERIFICATION',
       'VERIFIED',
       'INVOICED',
-      'CLOSED'
+      'CLOSED',
+      'CANCELLED'
     );
+  ELSE
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_enum
+      WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = 'ticket_state')
+        AND enumlabel = 'CANCELLED'
+    ) THEN
+      ALTER TYPE ticket_state ADD VALUE 'CANCELLED';
+    END IF;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'priority_level') THEN
@@ -214,9 +224,13 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
       from_state = 'APPROVAL_REQUIRED'
       AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
     )
+    OR (from_state = 'APPROVAL_REQUIRED' AND to_state = 'CANCELLED')
     OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'SCHEDULE_PROPOSED')
+    OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'CANCELLED')
     OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'SCHEDULED')
+    OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'CANCELLED')
     OR (from_state = 'SCHEDULED' AND to_state = 'DISPATCHED')
+    OR (from_state = 'SCHEDULED' AND to_state = 'CANCELLED')
     OR (
       from_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
       AND to_state = 'PENDING_CUSTOMER_CONFIRMATION'
@@ -225,21 +239,113 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
       from_state = 'PENDING_CUSTOMER_CONFIRMATION'
       AND to_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
     )
+    OR (from_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED', 'PENDING_CUSTOMER_CONFIRMATION') AND to_state = 'CANCELLED')
+    OR (from_state = 'NEW' AND to_state = 'CANCELLED')
+    OR (from_state = 'NEEDS_INFO' AND to_state = 'CANCELLED')
+    OR (from_state = 'TRIAGED' AND to_state = 'CANCELLED')
     OR (from_state = 'DISPATCHED' AND to_state = 'ON_SITE')
+    OR (from_state = 'DISPATCHED' AND to_state = 'ON_HOLD')
+    OR (from_state = 'DISPATCHED' AND to_state = 'SCHEDULED')
+    OR (from_state = 'DISPATCHED' AND to_state = 'CANCELLED')
     OR (from_state = 'ON_SITE' AND to_state = 'IN_PROGRESS')
+    OR (from_state = 'ON_SITE' AND to_state = 'ON_HOLD')
+    OR (from_state = 'ON_SITE' AND to_state = 'SCHEDULED')
+    OR (from_state = 'ON_SITE' AND to_state = 'CANCELLED')
     OR (
       from_state = 'IN_PROGRESS'
-      AND to_state IN ('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED')
+      AND to_state IN (
+        'ON_HOLD',
+        'SCHEDULED',
+        'COMPLETED_PENDING_VERIFICATION',
+        'APPROVAL_REQUIRED'
+      )
     )
-    OR (from_state = 'ON_HOLD' AND to_state IN ('READY_TO_SCHEDULE', 'IN_PROGRESS'))
-    OR (from_state = 'COMPLETED_PENDING_VERIFICATION' AND to_state = 'VERIFIED')
-    OR (from_state = 'VERIFIED' AND to_state = 'INVOICED')
-    OR (from_state = 'INVOICED' AND to_state = 'CLOSED')
+    OR (from_state = 'IN_PROGRESS' AND to_state = 'CANCELLED')
+    OR (
+      from_state = 'ON_HOLD'
+      AND to_state IN ('READY_TO_SCHEDULE', 'IN_PROGRESS', 'SCHEDULED')
+    )
+    OR (from_state = 'ON_HOLD' AND to_state = 'CANCELLED')
+    OR (
+      from_state = 'COMPLETED_PENDING_VERIFICATION'
+      AND to_state IN ('VERIFIED', 'CLOSED', 'CANCELLED')
+    )
+    OR (from_state = 'VERIFIED' AND to_state IN ('INVOICED', 'IN_PROGRESS', 'CLOSED', 'CANCELLED'))
+    OR (from_state = 'INVOICED' AND to_state IN ('CLOSED', 'IN_PROGRESS', 'CANCELLED'))
   )
 );
 
 CREATE INDEX IF NOT EXISTS idx_transitions_ticket_created ON ticket_state_transitions(ticket_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_transitions_from_to ON ticket_state_transitions(from_state, to_state);
+
+DO $$
+BEGIN
+  ALTER TABLE ticket_state_transitions DROP CONSTRAINT IF EXISTS chk_ticket_state_transition_valid;
+  ALTER TABLE ticket_state_transitions
+  ADD CONSTRAINT chk_ticket_state_transition_valid CHECK (
+    (from_state IS NULL AND to_state = 'NEW')
+    OR (from_state IS NULL AND to_state IN ('TRIAGED', 'READY_TO_SCHEDULE'))
+    OR (from_state = 'NEW' AND to_state IN ('NEEDS_INFO', 'TRIAGED'))
+    OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
+    OR (
+      from_state = 'TRIAGED'
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
+    )
+    OR (from_state = 'TRIAGED' AND to_state = 'DISPATCHED')
+    OR (
+      from_state = 'APPROVAL_REQUIRED'
+      AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
+    )
+    OR (from_state = 'APPROVAL_REQUIRED' AND to_state = 'CANCELLED')
+    OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'SCHEDULE_PROPOSED')
+    OR (from_state = 'READY_TO_SCHEDULE' AND to_state = 'CANCELLED')
+    OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'SCHEDULED')
+    OR (from_state = 'SCHEDULE_PROPOSED' AND to_state = 'CANCELLED')
+    OR (from_state = 'SCHEDULED' AND to_state = 'DISPATCHED')
+    OR (from_state = 'SCHEDULED' AND to_state = 'CANCELLED')
+    OR (
+      from_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
+      AND to_state = 'PENDING_CUSTOMER_CONFIRMATION'
+    )
+    OR (
+      from_state = 'PENDING_CUSTOMER_CONFIRMATION'
+      AND to_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED')
+    )
+    OR (from_state IN ('READY_TO_SCHEDULE', 'SCHEDULE_PROPOSED', 'SCHEDULED', 'PENDING_CUSTOMER_CONFIRMATION') AND to_state = 'CANCELLED')
+    OR (from_state = 'NEW' AND to_state = 'CANCELLED')
+    OR (from_state = 'NEEDS_INFO' AND to_state = 'CANCELLED')
+    OR (from_state = 'TRIAGED' AND to_state = 'CANCELLED')
+    OR (from_state = 'DISPATCHED' AND to_state = 'ON_SITE')
+    OR (from_state = 'DISPATCHED' AND to_state = 'ON_HOLD')
+    OR (from_state = 'DISPATCHED' AND to_state = 'SCHEDULED')
+    OR (from_state = 'DISPATCHED' AND to_state = 'CANCELLED')
+    OR (from_state = 'ON_SITE' AND to_state = 'IN_PROGRESS')
+    OR (from_state = 'ON_SITE' AND to_state = 'ON_HOLD')
+    OR (from_state = 'ON_SITE' AND to_state = 'SCHEDULED')
+    OR (from_state = 'ON_SITE' AND to_state = 'CANCELLED')
+    OR (
+      from_state = 'IN_PROGRESS'
+      AND to_state IN (
+        'ON_HOLD',
+        'SCHEDULED',
+        'COMPLETED_PENDING_VERIFICATION',
+        'APPROVAL_REQUIRED'
+      )
+    )
+    OR (from_state = 'IN_PROGRESS' AND to_state = 'CANCELLED')
+    OR (
+      from_state = 'ON_HOLD'
+      AND to_state IN ('READY_TO_SCHEDULE', 'IN_PROGRESS', 'SCHEDULED')
+    )
+    OR (from_state = 'ON_HOLD' AND to_state = 'CANCELLED')
+    OR (
+      from_state = 'COMPLETED_PENDING_VERIFICATION'
+      AND to_state IN ('VERIFIED', 'CLOSED', 'CANCELLED')
+    )
+    OR (from_state = 'VERIFIED' AND to_state IN ('INVOICED', 'IN_PROGRESS', 'CLOSED', 'CANCELLED'))
+    OR (from_state = 'INVOICED' AND to_state IN ('CLOSED', 'IN_PROGRESS', 'CANCELLED'))
+  );
+END $$;
 
 CREATE TABLE IF NOT EXISTS autonomy_control_state (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -389,12 +495,35 @@ CREATE TABLE IF NOT EXISTS evidence_items (
   uri text NOT NULL CHECK (length(trim(uri)) > 0),
   checksum text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_immutable boolean NOT NULL DEFAULT false,
+  immutable_reason text,
+  immutable_by text,
+  immutable_request_id uuid,
+  immutable_at timestamptz,
   created_by text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_evidence_ticket_created ON evidence_items(ticket_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_evidence_kind ON evidence_items(kind);
+CREATE INDEX IF NOT EXISTS idx_evidence_immutable ON evidence_items(ticket_id, is_immutable);
+
+CREATE TABLE IF NOT EXISTS closeout_artifacts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  artifact_type text NOT NULL CHECK (length(trim(artifact_type)) > 0),
+  artifact_name text,
+  artifact_hash text CHECK (artifact_hash IS NULL OR length(trim(artifact_hash)) > 0),
+  artifact_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by text,
+  request_id uuid NOT NULL,
+  correlation_id text,
+  trace_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_closeout_artifacts_ticket_type UNIQUE (ticket_id, artifact_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_closeout_artifacts_ticket_created ON closeout_artifacts(ticket_id, created_at);
 
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

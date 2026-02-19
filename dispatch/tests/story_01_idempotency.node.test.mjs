@@ -30,11 +30,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -182,10 +178,14 @@ test("idempotency replay returns exact prior response and no duplicate mutation"
   assert.equal(second.status, first.status);
   assert.deepEqual(second.body, first.body);
 
-  const ticketCount = Number(psql(`SELECT count(*) FROM tickets WHERE summary = '${payload.summary}';`));
+  const ticketCount = Number(
+    psql(`SELECT count(*) FROM tickets WHERE summary = '${payload.summary}';`),
+  );
   assert.equal(ticketCount, 1);
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${createdTicketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${createdTicketId}';`),
+  );
   assert.equal(auditCount, 1);
 
   const transitionCount = Number(
@@ -324,12 +324,16 @@ test("invalid transition fails closed and successful mutations emit audit + tran
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "Emergency urgency in idempotency replay scenario",
     },
   );
   assert.equal(emergencyDispatch.status, 200);
   assert.equal(emergencyDispatch.body.state, "DISPATCHED");
 
-  const auditCount = Number(psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${createdTicketId}';`));
+  const auditCount = Number(
+    psql(`SELECT count(*) FROM audit_events WHERE ticket_id = '${createdTicketId}';`),
+  );
   const transitionCount = Number(
     psql(`SELECT count(*) FROM ticket_state_transitions WHERE ticket_id = '${createdTicketId}';`),
   );

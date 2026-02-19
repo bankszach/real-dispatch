@@ -412,6 +412,8 @@ test("pilot UAT matrix executes dispatcher+technician lifecycle across top incid
       payload: {
         tech_id: techId,
         dispatch_mode: "EMERGENCY_BYPASS",
+        dispatch_confirmation: true,
+        dispatch_rationale: "Pilot readiness requires expedited dispatch without delay",
       },
     });
     assert.equal(dispatch.status, 200);

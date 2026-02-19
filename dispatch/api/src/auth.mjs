@@ -452,13 +452,20 @@ export function createAuthRuntime(options = {}) {
     typeof options.nodeEnv === "string" && options.nodeEnv.trim() !== ""
       ? options.nodeEnv.trim()
       : (process.env.NODE_ENV ?? "");
-  const isProduction = nodeEnv.toLowerCase() === "production";
+  const normalizedNodeEnv = nodeEnv.toLowerCase();
+  const isExplicitLocalMode =
+    normalizedNodeEnv === "development" ||
+    normalizedNodeEnv === "local" ||
+    normalizedNodeEnv === "test";
 
   let allowDevHeaders;
   if (typeof options.allowDevHeaders === "boolean") {
     allowDevHeaders = options.allowDevHeaders;
   } else {
-    allowDevHeaders = parseBooleanEnv(process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS, !isProduction);
+    allowDevHeaders = parseBooleanEnv(
+      process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS,
+      isExplicitLocalMode,
+    );
   }
 
   const jwtSecret =

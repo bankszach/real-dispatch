@@ -31,11 +31,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -134,6 +130,8 @@ async function createInProgressTicket(summary) {
     {
       tech_id: techId,
       dispatch_mode: "EMERGENCY_BYPASS",
+      dispatch_confirmation: true,
+      dispatch_rationale: "Priority evidence-based bypass during evidence workflow validation",
     },
   );
   assert.equal(dispatch.status, 200);
@@ -438,7 +436,9 @@ test("qa.verify re-validates references and fails closed when evidence URI becom
   assert.equal(verify.status, 409);
   assert.equal(verify.body.error.code, "CLOSEOUT_REQUIREMENTS_INCOMPLETE");
   assert.equal(verify.body.error.requirement_code, "INVALID_EVIDENCE_REFERENCE");
-  assert.deepEqual(verify.body.error.invalid_evidence_refs, ["https://example.com/not-object-store"]);
+  assert.deepEqual(verify.body.error.invalid_evidence_refs, [
+    "https://example.com/not-object-store",
+  ]);
   assert.equal(
     psql(`SELECT state FROM tickets WHERE id = '${ticketId}';`),
     "COMPLETED_PENDING_VERIFICATION",

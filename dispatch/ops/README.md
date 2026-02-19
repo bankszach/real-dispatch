@@ -35,6 +35,9 @@ Runbooks and drill assets:
 - `dispatch/ops/runbooks/README.md`
 - `dispatch/ops/runbooks/stuck_scheduling.md`
 - `dispatch/ops/runbooks/completion_rejection.md`
+- `dispatch/ops/runbooks/health_db_migration.md`
+- `dispatch/ops/runbooks/db_backup.md`
+- `dispatch/ops/runbooks/db_wal_archive_recovery.md`
 - `dispatch/ops/runbooks/idempotency_conflict.md`
 - `dispatch/ops/runbooks/auth_policy_failure.md`
 - `dispatch/ops/runbooks/mvp_06_on_call_drill.md`
