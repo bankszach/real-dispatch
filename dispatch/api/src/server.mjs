@@ -3911,18 +3911,96 @@ function buildCloseoutPacketPayload(params) {
     evidenceValidation,
     closureReason = null,
     actor,
+    correlationId = null,
+    stateHistorySummary = null,
+    overrideFlags = {},
+    checklistStatus = null,
   } = params;
+  const template = ticket?.incident_type ? getIncidentTemplate(ticket.incident_type.trim()) : null;
+  const templateVersion = template?.version ?? null;
+  const requiredEvidenceKeys = template?.required_evidence_keys
+    ? [...new Set(template.required_evidence_keys)]
+    : [];
+  const requiredChecklistKeys = template?.required_checklist_keys
+    ? [...new Set(template.required_checklist_keys)]
+    : [];
+  const normalizedChecklistStatus =
+    checklistStatus && typeof checklistStatus === "object" && !Array.isArray(checklistStatus)
+      ? checklistStatus
+      : {};
+  const evidenceRows = Array.isArray(evidence) ? evidence : [];
+  const presentEvidenceKeys = new Set();
+  for (const row of evidenceRows) {
+    const key = readEvidenceKeyFromMetadata(row.metadata);
+    if (key) {
+      presentEvidenceKeys.add(key);
+    }
+    if (row.kind === "SIGNATURE") {
+      presentEvidenceKeys.add("signature_or_no_signature_reason");
+    }
+  }
+  const requiredEvidenceSummary = requiredEvidenceKeys.map((key) => ({
+    key,
+    present: presentEvidenceKeys.has(key),
+  }));
+  const requiredChecklistSummary = requiredChecklistKeys.map((key) => ({
+    key,
+    present: normalizedChecklistStatus[key] === true,
+  }));
   return {
     ticket_id: ticket.id,
     ticket_state: ticket.state,
+    actor_ids: {
+      actor_id: actor?.actorId ?? null,
+      actor_type: actor?.actorType ?? null,
+      actor_role: actor?.actorRole ?? null,
+    },
+    override_flags: {
+      closeout_override_code: overrideFlags.closeout_override_code ?? null,
+      override_code: overrideFlags.override_code ?? null,
+      approver_role: overrideFlags.approver_role ?? null,
+      override_reason: overrideFlags.override_reason ?? null,
+      policy_override: overrideFlags.policy_override ?? false,
+    },
+    timestamps: {
+      generated_at: nowIso(),
+      ticket_created_at: ticket.created_at ? new Date(ticket.created_at).toISOString() : null,
+      ticket_updated_at: ticket.updated_at ? new Date(ticket.updated_at).toISOString() : null,
+      close_transition_at:
+        stateHistorySummary?.transitions?.length > 0
+          ? (stateHistorySummary.transitions[stateHistorySummary.transitions.length - 1]
+              .occurred_at ?? null)
+          : null,
+    },
+    correlation_id: correlationId,
     closure_reason: closureReason,
-    actor_id: actor?.actorId ?? null,
-    actor_role: actor?.actorRole ?? null,
     generated_at: nowIso(),
+    evidence_summary: {
+      total_items: evidenceRows.length,
+      immutable_items: evidenceRows.filter((row) => row.is_immutable).length,
+      required_evidence: requiredEvidenceSummary,
+      required_checklist: requiredChecklistSummary,
+      evidence_items: evidenceRows.length,
+      provided_evidence_keys: [...presentEvidenceKeys].toSorted(),
+    },
+    required_evidence_checklist_status: {
+      template_version: templateVersion,
+      ready: Boolean(closeoutCheck?.ready),
+      code: closeoutCheck?.code ?? null,
+      incident_type: closeoutCheck?.incident_type ?? null,
+      missing_evidence_keys: closeoutCheck?.missing_evidence_keys ?? [],
+      missing_checklist_keys: closeoutCheck?.missing_checklist_keys ?? [],
+      invalid_evidence_refs: closeoutCheck?.invalid_evidence_refs ?? [],
+      signature_satisfied: Boolean(closeoutCheck?.signature_satisfied),
+      no_signature_reason: closeoutCheck?.no_signature_reason ?? null,
+      required_evidence: requiredEvidenceSummary,
+      required_checklist: requiredChecklistSummary,
+    },
     closeout_check: closeoutCheck ?? null,
     closeout_context: closeoutRequest ?? null,
     evidence_validation: evidenceValidation ?? null,
-    evidence_items: evidence.length,
+    evidence_items: evidenceRows.length,
+    state_history_summary: stateHistorySummary,
     evidence: evidence.map((row) => ({
       id: row.id,
       kind: row.kind,
@@ -3947,6 +4025,36 @@ function buildCloseoutCandidateEvidenceScope(evidenceRows, explicitEvidenceRefs)
     evidence_items: evidenceRows.length,
     evidence_keys: [...evidenceKeys].toSorted(),
     evidence_refs: Array.isArray(explicitEvidenceRefs) ? explicitEvidenceRefs : [],
+  };
+}
+
+async function buildCloseoutStateHistorySummary(client, ticketId) {
+  if (!client || !isUuid(ticketId)) {
+    return {
+      ticket_id: ticketId ?? null,
+      transition_count: 0,
+      transitions: [],
+    };
+  }
+
+  const result = await client.query(
+    `
+      SELECT from_state, to_state, created_at
+      FROM ticket_state_transitions
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC, id ASC
+    `,
+    [ticketId],
+  );
+  const transitions = result.rows.map((row) => ({
+    from_state: row.from_state ?? null,
+    to_state: row.to_state ?? null,
+    occurred_at: row.created_at ? new Date(row.created_at).toISOString() : null,
+  }));
+  return {
+    ticket_id: ticketId,
+    transition_count: transitions.length,
+    transitions,
   };
 }
 
@@ -5796,6 +5904,9 @@ async function qaVerifyMutation(client, context) {
     metrics,
     authRuntime,
     objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
   } = context;
   ensureObject(body);
   const verifiedAt = parseIsoDate(body.timestamp, "timestamp");
@@ -5908,8 +6019,8 @@ async function qaVerifyMutation(client, context) {
     explicitEvidenceRefs: completionEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
-    requireHeadVerification,
-    checksumEnforced: evidenceChecksumEnforcement,
+    requireHeadVerification: evidenceHeadValidationEnabled,
+    checksumEnforced: evidenceChecksumEnforced,
     headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
@@ -5976,6 +6087,14 @@ async function qaVerifyMutation(client, context) {
     [ticketId],
   );
   const ticket = update.rows[0];
+
+  await markEvidenceRowsImmutable(client, {
+    ticketId,
+    actor,
+    requestId,
+    evidenceRows: evidenceResult.rows,
+    reason: "closeout_verification",
+  });
 
   await insertAuditAndTransition(client, {
     ticketId,
@@ -6056,10 +6175,23 @@ async function billingGenerateInvoiceMutation(client, context) {
 }
 
 async function addEvidenceMutation(client, context) {
-  const { ticketId, body, actor, requestId, correlationId, traceId, authRuntime } = context;
+  const {
+    ticketId,
+    body,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    authRuntime,
+    objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
+  } = context;
   ensureObject(body);
   ensureString(body.kind, "kind");
   ensureString(body.uri, "uri");
+  const uri = body.uri.trim();
 
   const checksum = normalizeOptionalString(body.checksum, "checksum");
   const evidenceKey = normalizeOptionalString(body.evidence_key, "evidence_key");
@@ -6077,6 +6209,52 @@ async function addEvidenceMutation(client, context) {
   assertTicketScope(authRuntime, actor, existing);
   assertCommandStateAllowed("/tickets/{ticketId}/evidence", existing.state, body);
 
+  if (evidenceHeadValidationEnabled) {
+    if (!isObjectStoreResolvableUri(uri, objectStoreSchemes)) {
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Evidence URI is not a supported object store object",
+        {
+          requirement_code: "INVALID_EVIDENCE_REFERENCE",
+          incident_type: existing.incident_type?.trim()
+            ? existing.incident_type.trim().toUpperCase()
+            : null,
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+          invalid_evidence_refs: [uri],
+          head_check_failure: "UNSUPPORTED_SCHEME",
+        },
+      );
+    }
+
+    const headProbe = await verifyEvidenceUriForHeadProbe(uri, {
+      checksum: evidenceChecksumEnforced ? checksum : null,
+      timeoutMs: evidenceHeadTimeoutMs,
+    });
+    if (!headProbe.ok) {
+      throw new HttpError(
+        409,
+        "CLOSEOUT_REQUIREMENTS_INCOMPLETE",
+        "Evidence URI did not pass object-store validation",
+        {
+          requirement_code: "INVALID_EVIDENCE_REFERENCE",
+          incident_type: existing.incident_type?.trim()
+            ? existing.incident_type.trim().toUpperCase()
+            : null,
+          template_version: null,
+          missing_evidence_keys: [],
+          missing_checklist_keys: [],
+          invalid_evidence_refs: [uri],
+          head_check_failure: headProbe.reason,
+          head_check_message: headProbe.message ?? null,
+          checksum_enforced: Boolean(evidenceChecksumEnforced),
+        },
+      );
+    }
+  }
+
   const insert = await client.query(
     `
       INSERT INTO evidence_items (
@@ -6090,7 +6268,7 @@ async function addEvidenceMutation(client, context) {
       VALUES ($1,$2,$3,$4,$5,$6)
       RETURNING *
     `,
-    [ticketId, body.kind.trim(), body.uri.trim(), checksum, metadata, actor.actorId],
+    [ticketId, body.kind.trim(), uri, checksum, metadata, actor.actorId],
   );
   const evidenceItem = insert.rows[0];
 
@@ -6130,6 +6308,9 @@ async function techCompleteMutation(client, context) {
     metrics,
     authRuntime,
     objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
   } = context;
   ensureObject(body);
   ensureObjectField(body.checklist_status, "checklist_status");
@@ -6175,8 +6356,8 @@ async function techCompleteMutation(client, context) {
     explicitEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
-    requireHeadVerification,
-    checksumEnforced: evidenceChecksumEnforcement,
+    requireHeadVerification: evidenceHeadValidationEnabled,
+    checksumEnforced: evidenceChecksumEnforced,
     headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
@@ -6303,6 +6484,9 @@ async function closeoutCandidateMutation(client, context) {
     metrics,
     authRuntime,
     objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
   } = context;
   ensureObject(body);
   ensureObjectField(body.checklist_status, "checklist_status");
@@ -6348,8 +6532,8 @@ async function closeoutCandidateMutation(client, context) {
     explicitEvidenceRefs,
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
-    requireHeadVerification,
-    checksumEnforced: evidenceChecksumEnforcement,
+    requireHeadVerification: evidenceHeadValidationEnabled,
+    checksumEnforced: evidenceChecksumEnforced,
     headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
@@ -6569,6 +6753,9 @@ async function closeTicketMutation(client, context) {
     metrics,
     authRuntime,
     objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
   } = context;
   ensureObject(body);
   const reason = normalizeOptionalString(body.reason, "reason");
@@ -6636,8 +6823,8 @@ async function closeTicketMutation(client, context) {
     explicitEvidenceRefs: [],
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
-    requireHeadVerification: true,
-    checksumEnforced: evidenceChecksumEnforcement,
+    requireHeadVerification: evidenceHeadValidationEnabled,
+    checksumEnforced: evidenceChecksumEnforced,
     headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
@@ -6720,26 +6907,6 @@ async function closeTicketMutation(client, context) {
     reason: "closeout_verification",
   });
 
-  const closeoutPacket = buildCloseoutPacketPayload({
-    ticket: existing,
-    closeoutCheck: closeoutEvaluation,
-    closeoutRequest: latestCloseoutRequest,
-    evidenceValidation,
-    evidence: evidenceResult.rows,
-    closureReason: reason,
-    actor,
-  });
-  await insertCloseoutArtifact(client, {
-    ticketId,
-    actor,
-    requestId,
-    correlationId,
-    traceId,
-    artifactType: "closeout_packet",
-    artifactName: `closeout-${ticketId}.json`,
-    artifactPayload: closeoutPacket,
-  });
-
   const update = await client.query(
     `
       UPDATE tickets
@@ -6778,6 +6945,34 @@ async function closeTicketMutation(client, context) {
     },
   });
 
+  const stateHistorySummary = await buildCloseoutStateHistorySummary(client, ticketId);
+  const closeoutPacket = buildCloseoutPacketPayload({
+    ticket,
+    closeoutCheck: closeoutEvaluation,
+    closeoutRequest: latestCloseoutRequest,
+    evidenceValidation,
+    evidence: evidenceResult.rows,
+    closureReason: reason,
+    actor,
+    correlationId,
+    stateHistorySummary,
+    overrideFlags: {
+      closeout_override_code: closeoutOverrideCode,
+      policy_override: false,
+    },
+    checklistStatus,
+  });
+  await insertCloseoutArtifact(client, {
+    ticketId,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    artifactType: "closeout_packet",
+    artifactName: `closeout-${ticketId}.json`,
+    artifactPayload: closeoutPacket,
+  });
+
   return {
     status: 200,
     body: {
@@ -6801,6 +6996,9 @@ async function forceCloseTicketMutation(client, context) {
     metrics,
     authRuntime,
     objectStoreSchemes,
+    evidenceHeadValidationEnabled,
+    evidenceChecksumEnforced,
+    evidenceHeadTimeoutMs,
   } = context;
   ensureObject(body);
   const overrideCode = ensureStringMinLength(
@@ -6891,8 +7089,8 @@ async function forceCloseTicketMutation(client, context) {
     explicitEvidenceRefs: [],
     evidenceRows: evidenceResult.rows,
     objectStoreSchemes,
-    requireHeadVerification: true,
-    checksumEnforced: evidenceChecksumEnforcement,
+    requireHeadVerification: evidenceHeadValidationEnabled,
+    checksumEnforced: evidenceChecksumEnforced,
     headCheckTimeoutMs: evidenceHeadTimeoutMs,
   });
 
@@ -6975,26 +7173,6 @@ async function forceCloseTicketMutation(client, context) {
     reason: "closeout_verification",
   });
 
-  const closeoutPacket = buildCloseoutPacketPayload({
-    ticket: existing,
-    closeoutCheck: closeoutEvaluation,
-    closeoutRequest: latestCloseoutRequest,
-    evidenceValidation,
-    evidence: evidenceResult.rows,
-    closureReason: overrideReason,
-    actor,
-  });
-  await insertCloseoutArtifact(client, {
-    ticketId,
-    actor,
-    requestId,
-    correlationId,
-    traceId,
-    artifactType: "closeout_packet",
-    artifactName: `closeout-${ticketId}.json`,
-    artifactPayload: closeoutPacket,
-  });
-
   const update = await client.query(
     `
       UPDATE tickets
@@ -7035,6 +7213,36 @@ async function forceCloseTicketMutation(client, context) {
       immutable_evidence_count: evidenceResult.rowCount,
       closeout_packet_artifact_type: "closeout_packet",
     },
+  });
+
+  const stateHistorySummary = await buildCloseoutStateHistorySummary(client, ticketId);
+  const closeoutPacket = buildCloseoutPacketPayload({
+    ticket,
+    closeoutCheck: closeoutEvaluation,
+    closeoutRequest: latestCloseoutRequest,
+    evidenceValidation,
+    evidence: evidenceResult.rows,
+    closureReason: overrideReason,
+    actor,
+    correlationId,
+    stateHistorySummary,
+    overrideFlags: {
+      override_code: overrideCode,
+      approver_role: approverRole,
+      override_reason: overrideReason,
+      policy_override: true,
+    },
+    checklistStatus,
+  });
+  await insertCloseoutArtifact(client, {
+    ticketId,
+    actor,
+    requestId,
+    correlationId,
+    traceId,
+    artifactType: "closeout_packet",
+    artifactName: `closeout-${ticketId}.json`,
+    artifactPayload: closeoutPacket,
   });
 
   if (typeof metrics?.incrementDispatchOverrideClose === "function") {
@@ -7431,21 +7639,108 @@ async function manualBypassMutation(client, context) {
   };
 }
 
-async function runDispatchHealthCheck(pool) {
-  const requiredTransitionRules = Object.freeze([
-    { from: "DISPATCHED", to: "ON_HOLD" },
-    { from: "ON_SITE", to: "ON_HOLD" },
-    { from: "IN_PROGRESS", to: "ON_HOLD" },
-    { from: "DISPATCHED", to: "SCHEDULED" },
-    { from: "ON_SITE", to: "SCHEDULED" },
-    { from: "IN_PROGRESS", to: "SCHEDULED" },
-    { from: "ON_HOLD", to: "SCHEDULED" },
-    { from: "COMPLETED_PENDING_VERIFICATION", to: "VERIFIED" },
-    { from: "VERIFIED", to: "CLOSED" },
-    { from: "COMPLETED_PENDING_VERIFICATION", to: "CLOSED" },
-    { from: "VERIFIED", to: "IN_PROGRESS" },
-    { from: "INVOICED", to: "IN_PROGRESS" },
-  ]);
+async function runDispatchHealthCheck(
+  pool,
+  {
+    evidenceHeadVerificationEnabled = false,
+    evidenceChecksumEnforcementEnabled = false,
+    isProduction = false,
+  } = {},
+) {
+  const nullStateSentinel = "__NULL__";
+  const isOverrideTool = (toolName) => {
+    const normalized = String(toolName).toLowerCase();
+    return normalized.includes("force_") || normalized.includes("manual_bypass");
+  };
+  const transitionKey = (fromState, toState) => `${fromState ?? nullStateSentinel}->${toState}`;
+  const labelTransition = (key) => key.replace(`${nullStateSentinel}->`, "NULL->");
+  const contractTransitions = new Map();
+  for (const contract of Object.values(DISPATCH_CONTRACT)) {
+    if (!contract || typeof contract.resulting_state !== "string") {
+      continue;
+    }
+    const toState = String(contract.resulting_state).trim();
+    if (toState === "") {
+      continue;
+    }
+
+    const fromStates = Array.isArray(contract.allowed_from_states)
+      ? contract.allowed_from_states
+      : contract.allowed_from_states == null
+        ? [null]
+        : [];
+    if (fromStates.length === 0) {
+      continue;
+    }
+
+    const fromSet = contractTransitions;
+    for (const rawFromState of fromStates) {
+      const fromState = rawFromState == null ? null : String(rawFromState).trim();
+      if (fromState === "") {
+        continue;
+      }
+      const key = transitionKey(fromState, toState);
+      const entry = fromSet.get(key) ?? {
+        tools: new Set(),
+      };
+      if (typeof contract.tool_name === "string") {
+        entry.tools.add(contract.tool_name);
+      }
+      fromSet.set(key, entry);
+    }
+  }
+
+  const parseTransitionInList = (inListExpression) => {
+    const values = [];
+    for (const valueMatch of inListExpression.matchAll(/'([^']+)'/g)) {
+      if (valueMatch[1] == null) {
+        continue;
+      }
+      values.push(valueMatch[1]);
+    }
+    return values;
+  };
+  const normalizeTransitionDefinition = (constraintDefinition) => {
+    if (typeof constraintDefinition !== "string" || constraintDefinition.length === 0) {
+      return new Set();
+    }
+    const normalized = constraintDefinition.replace(/\s+/g, "");
+    const parsed = new Set();
+    const addTransition = (fromState, toState) => {
+      if (
+        fromState === undefined ||
+        toState === undefined ||
+        toState == null ||
+        toState.length === 0
+      ) {
+        return;
+      }
+      parsed.add(transitionKey(fromState, toState));
+    };
+
+    for (const match of normalized.matchAll(/from_state='([^']+)'ANDto_stateIN\(([^)]+)\)/g)) {
+      const fromState = match[1];
+      if (!fromState) {
+        continue;
+      }
+      for (const toState of parseTransitionInList(match[2])) {
+        addTransition(fromState, toState);
+      }
+    }
+    for (const match of normalized.matchAll(/from_stateISNULLANDto_stateIN\(([^)]+)\)/g)) {
+      for (const toState of parseTransitionInList(match[1])) {
+        addTransition(null, toState);
+      }
+    }
+    for (const match of normalized.matchAll(/from_state='([^']+)'ANDto_state='([^']+)'/g)) {
+      addTransition(match[1], match[2]);
+    }
+    for (const match of normalized.matchAll(/from_stateISNULLANDto_state='([^']+)'/g)) {
+      addTransition(null, match[1]);
+    }
+
+    return parsed;
+  };
 
   const normalClosePolicy = getDispatchToolPolicy("ticket.close");
   const forceClosePolicy = getDispatchToolPolicy("ticket.force_close");
@@ -7453,14 +7748,18 @@ async function runDispatchHealthCheck(pool) {
     normalClosePolicy?.allowed_from_states?.includes("COMPLETED_PENDING_VERIFICATION") ?? false;
   const forceCloseAllowsCpvClose =
     forceClosePolicy?.allowed_from_states?.includes("COMPLETED_PENDING_VERIFICATION") ?? false;
-
-  const hasTransitionRule = (constraintDefinition, fromState, toState) => {
-    if (typeof constraintDefinition !== "string" || constraintDefinition.length === 0) {
-      return false;
+  const cpvCloseTransitionKey = transitionKey("COMPLETED_PENDING_VERIFICATION", "CLOSED");
+  const overrideOnlyToolViolationTransitions = [];
+  for (const [key, { tools }] of contractTransitions) {
+    const hasOverride = [...tools].some(isOverrideTool);
+    const hasNormal = [...tools].some((toolName) => !isOverrideTool(toolName));
+    if (hasOverride && hasNormal) {
+      overrideOnlyToolViolationTransitions.push({
+        transition: key,
+        tools: [...tools].toSorted(),
+      });
     }
-    const needle = `from_state='${fromState}'ANDto_state='${toState}'`;
-    return constraintDefinition.includes(needle);
-  };
+  }
 
   const sleep = async (milliseconds) => {
     await new Promise((resolve) => {
@@ -7547,17 +7846,60 @@ async function runDispatchHealthCheck(pool) {
 
       const row = response.rows[0] ?? {};
       const transitionConstraintDefinition = row.state_transition_constraint_definition ?? "";
-      const normalCloseTransitionFailure = normalCloseAllowsCpvClose ? "fail" : "pass";
-      const requiredTransitions = Object.fromEntries(
-        requiredTransitionRules.map((rule) => {
-          const key = `${rule.from}->${rule.to}`;
-          return [
-            key,
-            hasTransitionRule(transitionConstraintDefinition, rule.from, rule.to) ? "pass" : "fail",
-          ];
+      const dbTransitions = normalizeTransitionDefinition(transitionConstraintDefinition);
+      const contractTransitionEntries = Array.from(contractTransitions.entries()).toSorted(
+        ([left], [right]) => left.localeCompare(right),
+      );
+      const contractTransitionsCoverage = Object.fromEntries(
+        contractTransitionEntries.map(([key]) => {
+          return [labelTransition(key), dbTransitions.has(key) ? "pass" : "fail"];
         }),
       );
+      const dbOnlyTransitions = Array.from(dbTransitions)
+        .filter((transition) => !contractTransitions.has(transition))
+        .toSorted((left, right) => left.localeCompare(right));
+      const dbOnlyTransitionCoverage = Object.fromEntries(
+        dbOnlyTransitions.map((key) => [labelTransition(key), "fail"]),
+      );
+      const contractCpvCloseTools =
+        contractTransitions.get(cpvCloseTransitionKey)?.tools ?? new Set();
+      const hasForceCloseCpvToolOnly =
+        contractCpvCloseTools.size > 0 && Array.from(contractCpvCloseTools).every(isOverrideTool);
+      const cpvCloseTransitionCoveragePass =
+        contractTransitions.has(cpvCloseTransitionKey) &&
+        dbTransitions.has(cpvCloseTransitionKey) &&
+        hasForceCloseCpvToolOnly;
+      const normalCloseTransitionFailure = normalCloseAllowsCpvClose ? "fail" : "pass";
+      const mixedOverrideCoverage = Object.fromEntries(
+        overrideOnlyToolViolationTransitions.map((item) => [
+          labelTransition(item.transition),
+          "fail",
+        ]),
+      );
+      const evidenceHeadVerificationStatus = evidenceHeadVerificationEnabled
+        ? "pass"
+        : isProduction
+          ? "fail"
+          : "warn";
+      const evidenceChecksumEnforcementStatus = evidenceChecksumEnforcementEnabled
+        ? "pass"
+        : isProduction
+          ? "fail"
+          : "warn";
       const checks = {
+        artifact_integrity: {
+          evidence_head_verification_enabled: evidenceHeadVerificationStatus,
+          evidence_checksum_enforcement_enabled: evidenceChecksumEnforcementStatus,
+          evidence_head_verification_mode: evidenceHeadVerificationEnabled
+            ? "required"
+            : "disabled",
+          evidence_checksum_enforcement_mode: evidenceChecksumEnforcementEnabled
+            ? "required"
+            : "optional",
+          immutable_evidence_column_present: row.has_evidence_immutable_column ? "pass" : "fail",
+          closeout_artifacts_table_present: row.has_closeout_artifacts_table ? "pass" : "fail",
+          artifact_history_required: "pass",
+        },
         database: {
           name: "database_connectivity",
           status: row.db_query_ok ? "pass" : "fail",
@@ -7570,8 +7912,15 @@ async function runDispatchHealthCheck(pool) {
           cancelled_state: row.has_cancelled_state_transition_label ? "pass" : "fail",
           transition_constraint: row.has_state_transition_constraint ? "pass" : "fail",
           transition_constraint_name: row.state_transition_constraint_name ? "pass" : "fail",
-          ...requiredTransitions,
+          ...contractTransitionsCoverage,
+          ...dbOnlyTransitionCoverage,
+          ...mixedOverrideCoverage,
           normal_close_contract_gating: normalCloseTransitionFailure,
+          cpv_close_transition_present_for_override: cpvCloseTransitionCoveragePass
+            ? "pass"
+            : "fail",
+          cpv_close_contract_path: contractTransitions.has(cpvCloseTransitionKey) ? "pass" : "fail",
+          normal_close_contract_to_state_cpv_blocked: normalCloseTransitionFailure,
           force_close_tool_present: forceClosePolicy ? "pass" : "fail",
           force_close_cpv_enabled:
             forceClosePolicy &&
@@ -7585,29 +7934,19 @@ async function runDispatchHealthCheck(pool) {
       const failures = Object.entries(checks)
         .flatMap(([, group]) => {
           if (group && typeof group === "object" && !Array.isArray(group) && "name" in group) {
-            return group.status === "pass" ? [] : [group];
+            return group.status === "pass" || group.status === "warn" ? [] : [group];
           }
           return Object.entries(group).flatMap(([name, status]) =>
-            status === "pass" ? [] : [{ name, status, status_code: "FAIL" }],
+            status === "pass" || status === "warn" ? [] : [{ name, status, status_code: "FAIL" }],
           );
         })
         .filter(Boolean);
 
-      const hasTransitionFailures = Object.values(requiredTransitions).some(
-        (status) => status === "fail",
-      );
-      if (hasTransitionFailures && row.has_state_transition_constraint) {
-        checks.migration.transition_constraint = "warn";
-        for (const [transitionName, transitionStatus] of Object.entries(requiredTransitions)) {
-          if (transitionStatus === "fail") {
-            failures.push({
-              name: `required_transition:${transitionName}`,
-              status: "fail",
-              status_code: "FAIL",
-            });
-          }
-        }
-      }
+      const hasTransitionFailures = [
+        ...Object.values(contractTransitionsCoverage),
+        ...Object.values(dbOnlyTransitionCoverage),
+        ...Object.values(mixedOverrideCoverage),
+      ].some((status) => status === "fail");
 
       const isHealthy = failures.length === 0 && !hasTransitionFailures;
 
@@ -8039,6 +8378,8 @@ export function createDispatchApiServer(options = {}) {
   const pool = options.pool ?? getPool();
   const host = options.host ?? process.env.DISPATCH_API_HOST ?? "127.0.0.1";
   const port = Number(options.port ?? process.env.DISPATCH_API_PORT ?? "8080");
+  const normalizedNodeEnv = process.env.NODE_ENV?.trim().toLowerCase();
+  const isProduction = normalizedNodeEnv === "production";
   const logger = options.logger ?? console;
   const logSinkPath = normalizeOptionalFilePath(
     options.logSinkPath ?? process.env.DISPATCH_LOG_SINK_PATH,
@@ -8066,11 +8407,13 @@ export function createDispatchApiServer(options = {}) {
   );
   const evidenceHeadValidationEnabled = parseBooleanValue(
     options.evidenceHeadValidationEnabled ?? process.env.DISPATCH_EVIDENCE_REQUIRE_HEAD,
-    process.env.NODE_ENV?.trim().toLowerCase() === "production",
+    isProduction,
   );
   const evidenceChecksumEnforced = parseBooleanValue(
-    options.evidenceChecksumEnforced ?? process.env.DISPATCH_EVIDENCE_REQUIRE_CHECKSUM,
-    false,
+    options.evidenceChecksumEnforced ??
+      process.env.REQUIRE_EVIDENCE_CHECKSUM ??
+      process.env.DISPATCH_EVIDENCE_REQUIRE_CHECKSUM,
+    isProduction,
   );
   const evidenceHeadTimeoutMs = parsePositiveIntegerValue(
     options.evidenceHeadTimeoutMs ?? process.env.DISPATCH_EVIDENCE_HEAD_TIMEOUT_MS,
@@ -8125,7 +8468,11 @@ export function createDispatchApiServer(options = {}) {
     }
 
     if (route.kind === "health") {
-      const healthCheck = await runDispatchHealthCheck(pool);
+      const healthCheck = await runDispatchHealthCheck(pool, {
+        evidenceHeadVerificationEnabled: evidenceHeadValidationEnabled,
+        evidenceChecksumEnforcementEnabled: evidenceChecksumEnforced,
+        isProduction,
+      });
       const statusCode = healthCheck.status === "ok" ? 200 : 503;
       sendJson(response, statusCode, healthCheck);
       metrics.incrementRequest(requestMethod, route.endpoint, statusCode);

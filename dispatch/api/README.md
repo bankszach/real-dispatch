@@ -105,6 +105,15 @@ UX read endpoints (`GET /ux/dispatcher/cockpit`, `GET /ux/technician/job-packet/
   - fail-closed responses include structured `error.policy_error.dimension` classification
   - dispatcher cockpit and technician packet responses include action-level `policy_error` details for disabled flows
 
+## Evidence enforcement profile
+
+- Production profile:
+  - `NODE_ENV=production` enables `DISPATCH_EVIDENCE_REQUIRE_HEAD` and checksum enforcement by default (hard fail if unset)
+  - required flags: `DISPATCH_EVIDENCE_REQUIRE_HEAD=true`, `REQUIRE_EVIDENCE_CHECKSUM=true` (or `DISPATCH_EVIDENCE_REQUIRE_CHECKSUM=true`)
+- Developer profile:
+  - explicitly set `DISPATCH_EVIDENCE_REQUIRE_HEAD=false` and `REQUIRE_EVIDENCE_CHECKSUM=false` to relax HEAD/checksum enforcement
+- Supported object-store schemes default to `s3` and `minio`, overridden by `DISPATCH_OBJECT_STORE_SCHEMES` (comma-separated)
+
 ## Current gaps
 
 - external key management / JWKS support (current MVP uses shared `HS256` secret)
