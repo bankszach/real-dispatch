@@ -7425,7 +7425,7 @@ async function forceUnassignMutation(client, context) {
       },
     });
   } else {
-    await insertAuditEvent({
+    await insertAuditEvent(client, {
       ticketId,
       beforeState: existing.state,
       afterState: existing.state,
@@ -7524,7 +7524,7 @@ async function evidenceExceptionMutation(client, context) {
     body,
   );
 
-  await insertAuditEvent({
+  await insertAuditEvent(client, {
     ticketId,
     beforeState: existing.state,
     afterState: existing.state,
@@ -7612,7 +7612,7 @@ async function manualBypassMutation(client, context) {
       },
     });
   } else {
-    await insertAuditEvent({
+    await insertAuditEvent(client, {
       ticketId,
       beforeState: existing.state,
       afterState: existing.state,

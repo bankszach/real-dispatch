@@ -685,3 +685,74 @@ export const DISPATCH_CONTRACT = {
 } as const;
 
 export type DispatchContract = (typeof DISPATCH_CONTRACT)[keyof typeof DISPATCH_CONTRACT];
+
+function normalizeArray(values: readonly string[] | null): string {
+  if (values == null) {
+    return "null";
+  }
+  return [...values].toSorted().join("|");
+}
+
+function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `0x${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function contractSurfaceHash(contract: typeof DISPATCH_CONTRACT): string {
+  const lines = Object.keys(contract)
+    .toSorted()
+    .map((toolName) => {
+      const tool = contract[toolName as keyof typeof DISPATCH_CONTRACT];
+      return [
+        toolName,
+        tool.http_method,
+        tool.route,
+        tool.idempotency_required ? "idempotent" : "non_idempotent",
+        normalizeArray(tool.allowed_roles),
+        normalizeArray(tool.allowed_from_states),
+        tool.resulting_state ?? "",
+      ].join("::");
+    })
+    .join("\n");
+
+  return fnv1a32(lines);
+}
+
+export const MUTATING_TOOLS = [
+  "ticket.create",
+  "ticket.blind_intake",
+  "ticket.triage",
+  "schedule.propose",
+  "schedule.confirm",
+  "assignment.dispatch",
+  "assignment.recommend",
+  "schedule.hold",
+  "schedule.release",
+  "schedule.rollback",
+  "tech.check_in",
+  "tech.request_change",
+  "approval.decide",
+  "closeout.add_evidence",
+  "closeout.candidate",
+  "tech.complete",
+  "qa.verify",
+  "billing.generate_invoice",
+  "ticket.close",
+  "ticket.force_close",
+  "ticket.cancel",
+  "dispatch.force_hold",
+  "dispatch.force_unassign",
+  "reopen_after_verification",
+  "closeout.evidence_exception",
+  "dispatch.manual_bypass",
+  "ops.autonomy.pause",
+  "ops.autonomy.rollback",
+] as const;
+
+// MUTATING_TOOLS = ["ticket.create", "ticket.blind_intake", "ticket.triage", "schedule.propose", "schedule.confirm", "assignment.dispatch", "assignment.recommend", "schedule.hold", "schedule.release", "schedule.rollback", "tech.check_in", "tech.request_change", "approval.decide", "closeout.add_evidence", "closeout.candidate", "tech.complete", "qa.verify", "billing.generate_invoice", "ticket.close", "ticket.force_close", "ticket.cancel", "dispatch.force_hold", "dispatch.force_unassign", "reopen_after_verification", "closeout.evidence_exception", "dispatch.manual_bypass", "ops.autonomy.pause", "ops.autonomy.rollback"]
+
+export const DISPATCH_CONTRACT_HASH = contractSurfaceHash(DISPATCH_CONTRACT);

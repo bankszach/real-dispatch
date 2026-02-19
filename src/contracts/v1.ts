@@ -1,5 +1,6 @@
 // Real Dispatch core contracts (v1).
 // Source of truth: docs/rfcs/0002-dispatch-operating-model-v1.md
+import { MUTATING_TOOLS as DISPATCH_MUTATING_TOOLS } from "../dispatch/contracts/dispatch-contract.v1.ts";
 
 export const ContractVersion = "v1" as const;
 
@@ -28,8 +29,7 @@ export const EntitlementCheckpointStates = [
   "approved",
   "denied",
 ] as const;
-export type EntitlementCheckpointState =
-  (typeof EntitlementCheckpointStates)[number];
+export type EntitlementCheckpointState = (typeof EntitlementCheckpointStates)[number];
 
 export const SchedulingCheckpointStates = [
   "ready_to_schedule",
@@ -37,8 +37,7 @@ export const SchedulingCheckpointStates = [
   "scheduled",
   "dispatched",
 ] as const;
-export type SchedulingCheckpointState =
-  (typeof SchedulingCheckpointStates)[number];
+export type SchedulingCheckpointState = (typeof SchedulingCheckpointStates)[number];
 
 export const ExecutionCheckpointStates = [
   "onsite",
@@ -49,15 +48,9 @@ export const ExecutionCheckpointStates = [
 export type ExecutionCheckpointState = (typeof ExecutionCheckpointStates)[number];
 
 export const VerificationCheckpointStates = ["pending", "verified", "rejected"] as const;
-export type VerificationCheckpointState =
-  (typeof VerificationCheckpointStates)[number];
+export type VerificationCheckpointState = (typeof VerificationCheckpointStates)[number];
 
-export const BillingCheckpointStates = [
-  "not_ready",
-  "draft_ready",
-  "invoiced",
-  "paid",
-] as const;
+export const BillingCheckpointStates = ["not_ready", "draft_ready", "invoiced", "paid"] as const;
 export type BillingCheckpointState = (typeof BillingCheckpointStates)[number];
 
 export const Priorities = ["low", "standard", "high", "emergency"] as const;
@@ -221,12 +214,7 @@ export type Nte = {
   escalation_required_above_cents: number;
 };
 
-export const ApprovalTypes = [
-  "nte_increase",
-  "after_hours",
-  "replacement",
-  "quote",
-] as const;
+export const ApprovalTypes = ["nte_increase", "after_hours", "replacement", "quote"] as const;
 export type ApprovalType = (typeof ApprovalTypes)[number];
 
 export const ApprovalStatuses = ["pending", "approved", "denied", "canceled"] as const;
@@ -252,12 +240,7 @@ export type AppointmentWindow = {
   timezone: string;
 };
 
-export const AppointmentStatuses = [
-  "proposed",
-  "confirmed",
-  "rescheduled",
-  "canceled",
-] as const;
+export const AppointmentStatuses = ["proposed", "confirmed", "rescheduled", "canceled"] as const;
 export type AppointmentStatus = (typeof AppointmentStatuses)[number];
 
 export type Appointment = {
@@ -324,13 +307,7 @@ export type QaStatus = (typeof QaStatuses)[number];
 
 export type TechnicianTimelineEntry = {
   timeline_id: ULID;
-  type:
-    | "acknowledged"
-    | "onsite"
-    | "status_update"
-    | "on_hold"
-    | "resumed"
-    | "completed";
+  type: "acknowledged" | "onsite" | "status_update" | "on_hold" | "resumed" | "completed";
   message: string;
   created_at: ISO8601;
   created_by: ActorRef;
@@ -452,9 +429,7 @@ export type AuditEvent = {
   };
 };
 
-export const AllowedStateTransitions: Readonly<
-  Record<TicketState, readonly TicketState[]>
-> = {
+export const AllowedStateTransitions: Readonly<Record<TicketState, readonly TicketState[]>> = {
   new: ["triaged", "schedulable", "canceled"],
   triaged: ["schedulable", "canceled"],
   schedulable: ["scheduled", "canceled"],
@@ -476,13 +451,11 @@ function transitionKey(from: TicketState, to: TicketState): StateTransition {
   return `${from}->${to}`;
 }
 
-const AllStateTransitions: StateTransition[] = Object.entries(
-  AllowedStateTransitions,
-).flatMap(([from, tos]) => tos.map((to) => transitionKey(from as TicketState, to)));
+const AllStateTransitions: StateTransition[] = Object.entries(AllowedStateTransitions).flatMap(
+  ([from, tos]) => tos.map((to) => transitionKey(from as TicketState, to)),
+);
 
-export const RoleAllowedStateTransitions: Readonly<
-  Record<Role, readonly StateTransition[]>
-> = {
+export const RoleAllowedStateTransitions: Readonly<Record<Role, readonly StateTransition[]>> = {
   system_intake_agent: [
     transitionKey("new", "triaged"),
     transitionKey("new", "schedulable"),
@@ -515,20 +488,17 @@ export function isTransitionAllowedForRole(
   return RoleAllowedStateTransitions[role].includes(transitionKey(from, to));
 }
 
-export const DispatchMutationActions = [
-  "ticket.create",
+const DispatchMutationActionsLegacy = [
   "ticket.add_message",
   "ticket.set_priority",
   "ticket.set_incident_type",
   "ticket.mark_triaged",
   "ticket.mark_schedulable",
-  "ticket.cancel",
   "entitlement.evaluate",
   "approval.request",
   "approval.approve",
   "approval.deny",
   "schedule.propose_slots",
-  "schedule.confirm",
   "schedule.reschedule",
   "dispatch.assign_tech",
   "dispatch.set_eta",
@@ -536,7 +506,6 @@ export const DispatchMutationActions = [
   "dispatch.mark_on_hold",
   "dispatch.resume_from_hold",
   "closeout.add_note",
-  "closeout.add_evidence",
   "closeout.record_parts",
   "closeout.record_labor",
   "closeout.checklist_complete",
@@ -546,15 +515,17 @@ export const DispatchMutationActions = [
   "qa.record_result",
   "billing.generate_invoice_draft",
   "billing.compile_closeout_packet",
-  "ticket.close",
   "billing.issue_invoice",
   "billing.record_payment",
 ] as const;
+const dispatchMutationActionLegacySet = new Set(DispatchMutationActionsLegacy);
+export const DispatchMutationActions = [
+  ...DISPATCH_MUTATING_TOOLS,
+  ...DispatchMutationActionsLegacy.filter((action) => !dispatchMutationActionLegacySet.has(action)),
+] as const;
 export type DispatchMutationAction = (typeof DispatchMutationActions)[number];
 
-export const RoleAllowedActions: Readonly<
-  Record<Role, readonly DispatchMutationAction[]>
-> = {
+export const RoleAllowedActions: Readonly<Record<Role, readonly DispatchMutationAction[]>> = {
   system_intake_agent: [
     "ticket.create",
     "ticket.add_message",
@@ -606,10 +577,7 @@ export const RoleAllowedActions: Readonly<
   customer: ["ticket.add_message"],
 };
 
-export function isActionAllowedForRole(
-  role: Role,
-  action: DispatchMutationAction,
-): boolean {
+export function isActionAllowedForRole(role: Role, action: DispatchMutationAction): boolean {
   return RoleAllowedActions[role].includes(action);
 }
 

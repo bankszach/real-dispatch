@@ -4,6 +4,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   DISPATCH_CONTRACT,
+  DISPATCH_CONTRACT_HASH,
+  MUTATING_TOOLS as CANONICAL_MUTATING_TOOLS,
   type DispatchContract,
 } from "../dispatch/contracts/dispatch-contract.v1.ts";
 import {
@@ -18,6 +20,10 @@ const ROOT = resolve(".");
 
 const contract = DISPATCH_CONTRACT as ContractRecord;
 const contractToolNames = Object.keys(contract).toSorted();
+const contractMutatingTools = contractToolNames
+  .filter((toolName) => contract[toolName].http_method.toUpperCase() !== "GET")
+  .toSorted();
+const canonicalMutatingTools = [...CANONICAL_MUTATING_TOOLS].toSorted();
 const contractRoutes = Object.fromEntries(
   contractToolNames.map((toolName) => [contract[toolName].route, toolName]),
 );
@@ -65,6 +71,71 @@ function assertDeepEqual(label: string, actual: unknown, expected: unknown) {
     return;
   }
   problems.push(`${label} does not match expected schema`);
+}
+
+function contractSurfaceHash(sourceContract: Record<string, DispatchContract>): string {
+  const lines = Object.keys(sourceContract)
+    .toSorted()
+    .map((toolName) => {
+      const contractEntry = sourceContract[toolName];
+      return [
+        toolName,
+        contractEntry.http_method,
+        contractEntry.route,
+        contractEntry.idempotency_required ? "idempotent" : "non_idempotent",
+        [...contractEntry.allowed_roles].toSorted().join("|"),
+        (normalizeStateList(contractEntry.allowed_from_states) ?? ["null"]).join("|"),
+        contractEntry.resulting_state ?? "",
+      ].join("::");
+    })
+    .join("\n");
+
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < lines.length; i += 1) {
+    hash ^= lines.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `0x${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function ensureMutatingAuthority() {
+  assertDeepEqual(
+    "Contract mutating tools list must match contract authority list",
+    contractMutatingTools,
+    canonicalMutatingTools,
+  );
+  assertEqual(
+    "Dispatch contract surface hash must match canonical export",
+    contractSurfaceHash(contract),
+    DISPATCH_CONTRACT_HASH,
+  );
+  for (const toolName of contractMutatingTools) {
+    const contractEntry = contract[toolName];
+    assertEqual(
+      `Mutating tool '${toolName}' must require idempotency`,
+      contractEntry.idempotency_required,
+      true,
+    );
+  }
+  if (
+    !/import\s*\{[\s\S]*?MUTATING_TOOLS[\s\S]*\}\s*from\s*["']\.\.\/\.\.\/dispatch\/contracts\/dispatch-contract\.v1\.ts["']/u.test(
+      readFileSync(resolve(ROOT, "src/contracts/v1.ts"), "utf8"),
+    )
+  ) {
+    problems.push(
+      "src/contracts/v1.ts must import MUTATING_TOOLS from dispatch/contracts/dispatch-contract.v1.ts",
+    );
+  }
+}
+
+function ensureAuditCallIntegrity() {
+  const serverSource = readFileSync(resolve(ROOT, "dispatch/api/src/server.mjs"), "utf8");
+  const missingClientCalls = [...serverSource.matchAll(/insertAuditEvent\(\s*\{/gu)];
+  if (missingClientCalls.length > 0) {
+    problems.push(
+      `insertAuditEvent called without DB client in ${missingClientCalls.length} place(s).`,
+    );
+  }
 }
 
 function ensureContractMatchesPolicy() {
@@ -207,7 +278,9 @@ function ensureTestsReferenceKnownTools() {
 }
 
 ensureContractMatchesPolicy();
+ensureMutatingAuthority();
 ensureRoutesExistInApi();
+ensureAuditCallIntegrity();
 ensureTestsReferenceKnownTools();
 
 if (problems.length > 0) {
