@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -30,11 +31,7 @@ function run(command, args, input = undefined) {
   });
   if (result.status !== 0) {
     throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        result.stdout,
-        result.stderr,
-      ]
+      [`Command failed: ${command} ${args.join(" ")}`, result.stdout, result.stderr]
         .filter(Boolean)
         .join("\n"),
     );
@@ -154,6 +151,15 @@ test.before(async () => {
     INSERT INTO sites (id, account_id, name, address1, city)
     VALUES ('${siteId}', '${accountId}', 'MVP 01 Site', '10 Main St', 'Springfield');
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "MVP-01 Dispatch Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({
@@ -460,10 +466,7 @@ test("MVP-01 endpoint parity path succeeds end-to-end with audit/idempotency gua
     .split("\n")
     .filter(Boolean);
 
-  assert.deepEqual(transitionCounts, [
-    "DISPATCHED->ON_SITE:1",
-    "ON_SITE->IN_PROGRESS:1",
-  ]);
+  assert.deepEqual(transitionCounts, ["DISPATCHED->ON_SITE:1", "ON_SITE->IN_PROGRESS:1"]);
 
   const timeline = await get(`/tickets/${ticketId}/timeline`, {
     "X-Actor-Id": "dispatcher-mvp01",
@@ -475,7 +478,7 @@ test("MVP-01 endpoint parity path succeeds end-to-end with audit/idempotency gua
   assert.equal(Array.isArray(timeline.body.events), true);
   assert.equal(timeline.body.events.length >= 12, true);
 
-  const toolNames = timeline.body.events.map((event) => event.tool_name);
+  const toolNames = new Set(timeline.body.events.map((event) => event.tool_name));
   for (const expectedTool of [
     "ticket.create",
     "ticket.triage",
@@ -489,7 +492,7 @@ test("MVP-01 endpoint parity path succeeds end-to-end with audit/idempotency gua
     "qa.verify",
     "billing.generate_invoice",
   ]) {
-    assert.equal(toolNames.includes(expectedTool), true, `timeline missing tool ${expectedTool}`);
+    assert.equal(toolNames.has(expectedTool), true, `timeline missing tool ${expectedTool}`);
   }
 
   const scheduleProposeTransitionCount = Number(

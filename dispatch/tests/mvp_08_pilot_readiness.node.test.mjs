@@ -6,6 +6,7 @@ import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
 import { DispatchBridgeError, isUuid, invokeDispatchAction } from "../tools-plugin/src/bridge.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -334,6 +335,17 @@ test.before(async () => {
       true
     );
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "MVP-08 Pilot Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+        active: true,
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({

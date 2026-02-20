@@ -38,8 +38,8 @@ describe("dispatch db migration 001_init", () => {
       "NEW transitions not constrained",
     );
     expectSql(
-      /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED'\)/,
-      "TRIAGED transitions do not include emergency dispatch path",
+      /from_state = 'TRIAGED'[\s\S]*to_state IN \('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE'\)/,
+      "TRIAGED transitions should not include direct DISPATCHED path",
     );
     expectSql(
       /from_state = 'APPROVAL_REQUIRED'[\s\S]*to_state IN \('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS'\)/,

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -174,6 +175,15 @@ test.before(async () => {
     INSERT INTO sites (id, account_id, name, address1, city)
     VALUES ('${siteId}', '${accountId}', 'MVP 06 Site', '106 Main St', 'Springfield');
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "MVP-06 Dispatch Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+      },
+    ]),
+  );
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rd-mvp06-"));
   logSinkPath = path.join(tempDir, "dispatch-api.log.ndjson");

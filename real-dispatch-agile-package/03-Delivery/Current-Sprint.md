@@ -31,3 +31,13 @@ File handoff naming pattern for active workstream:
 Sprint-1 invariant note:
 
 - Inbound formatting maps `[dispatch]` → `[openclaw]` for web inbound display; dispatch internals remain unchanged.
+
+## Sprint 2 (2026-03-02 → 2026-03-15): Technician Directory replacement
+
+- Replace hardcoded `TECHNICIAN_DIRECTORY` with persistent policy-aware technician data (`technicians`, `technician_skills`, `technician_regions`, `technician_availability`).
+- Route `assignment.recommend` and `assignment.dispatch` through DB-backed technician filtering by active status, skill match, region eligibility, and active workload.
+- Keep recommendation snapshots unchanged from API contract perspective while ensuring all dispatch assignment inputs come from truth, not stub fixtures.
+- Preserve existing comms/autonomy boundaries for this sprint:
+  - no communications rollout
+  - no autonomy expansion
+  - no external SaaS wiring

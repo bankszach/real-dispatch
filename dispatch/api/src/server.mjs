@@ -100,140 +100,6 @@ const RECOMMENDATION_MAX_LIMIT = 20;
 const RECOMMENDATION_ALLOWED_MODES = Object.freeze(["STANDARD", "EMERGENCY_BYPASS"]);
 const RECOMMENDATION_ALLOWED_MODES_SET = Object.freeze(new Set(RECOMMENDATION_ALLOWED_MODES));
 const DISPATCH_BYPASS_PRIORITY_THRESHOLD = Object.freeze(new Set(["EMERGENCY"]));
-const TECHNICIAN_DIRECTORY = Object.freeze([
-  {
-    tech_id: "00000000-0000-0000-0000-000000000083",
-    tech_name: "Dispatcher Tech 083",
-    service_types: [
-      "DOOR_WONT_LATCH",
-      "CANNOT_SECURE_ENTRY",
-      "ACCESS_CONTROL_FAULT",
-      "DOOR_PANEL_FAILURE",
-      "DEFAULT",
-    ],
-    zone: "CA",
-    active_load: 1,
-    quality_signal: 95,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000023",
-    tech_name: "Dispatcher Tech 023",
-    service_types: ["DOOR_WONT_LATCH", "ACCESS_CONTROL_FAULT", "DEFAULT"],
-    zone: "CA",
-    active_load: 2,
-    quality_signal: 90,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000033",
-    tech_name: "Dispatcher Tech 033",
-    service_types: ["DOOR_PANEL_FAILURE", "DEFAULT"],
-    zone: "CA",
-    active_load: 3,
-    quality_signal: 86,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000043",
-    tech_name: "Dispatcher Tech 043",
-    service_types: ["DOOR_WONT_LATCH", "CANNOT_SECURE_ENTRY", "DEFAULT"],
-    zone: "CA",
-    active_load: 5,
-    quality_signal: 81,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000053",
-    tech_name: "Dispatcher Tech 053",
-    service_types: ["CANNOT_SECURE_ENTRY", "DOOR_PANEL_FAILURE", "DEFAULT"],
-    zone: "CA",
-    active_load: 4,
-    quality_signal: 87,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000073",
-    tech_name: "Dispatcher Tech 073",
-    service_types: ["ACCESS_CONTROL_FAULT", "DOOR_WONT_LATCH", "DEFAULT"],
-    zone: "CA",
-    active_load: 2,
-    quality_signal: 90,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000099",
-    tech_name: "Dispatcher Tech 099",
-    service_types: ["DOOR_WONT_LATCH", "DEFAULT"],
-    zone: "CA",
-    active_load: 1,
-    quality_signal: 94,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000103",
-    tech_name: "Dispatcher Tech 103",
-    service_types: ["DOOR_PANEL_FAILURE", "DEFAULT"],
-    zone: "CA",
-    active_load: 3,
-    quality_signal: 85,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000183",
-    tech_name: "Dispatcher Tech 183",
-    service_types: ["DOOR_WONT_LATCH", "DEFAULT"],
-    zone: "CA",
-    active_load: 1,
-    quality_signal: 90,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000333",
-    tech_name: "Dispatcher Tech 333",
-    service_types: ["DOOR_WONT_LATCH", "DEFAULT"],
-    zone: "CA",
-    active_load: 2,
-    quality_signal: 88,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000143",
-    tech_name: "Dispatcher Tech 143",
-    service_types: ["ACCESS_CONTROL_FAULT"],
-    zone: "CA",
-    active_load: 6,
-    quality_signal: 84,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000105",
-    tech_name: "Dispatcher Tech 105",
-    service_types: ["ACCESS_CONTROL_FAULT", "CANNOT_SECURE_ENTRY", "DEFAULT"],
-    zone: "CA",
-    active_load: 2,
-    quality_signal: 92,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000123",
-    tech_name: "Dispatcher Tech 123",
-    service_types: ["DOOR_WONT_LATCH", "DOOR_PANEL_FAILURE", "DEFAULT"],
-    zone: "CA",
-    active_load: 6,
-    quality_signal: 84,
-    available: true,
-  },
-  {
-    tech_id: "00000000-0000-0000-0000-000000000083",
-    tech_name: "Dispatcher Tech 083 Backup",
-    service_types: ["DEFAULT"],
-    zone: "TX",
-    active_load: 8,
-    quality_signal: 75,
-    available: true,
-  },
-]);
 const HOLD_REASON_CODES = Object.freeze([
   "CUSTOMER_PENDING",
   "CUSTOMER_UNREACHABLE",
@@ -258,6 +124,38 @@ const AUTONOMY_HISTORY_PAYLOAD_KEYS = Object.freeze({
   INCIDENT_TYPE: "incident_type",
   REASON: "reason",
 });
+const TECHNICIAN_OPEN_WORKLOAD_EXCLUDED_STATES = Object.freeze([
+  "COMPLETED_PENDING_VERIFICATION",
+  "CANCELLED",
+  "INVOICED",
+  "VERIFIED",
+  "CLOSED",
+]);
+
+function toStringList(raw) {
+  if (raw == null) {
+    return [];
+  }
+  if (Array.isArray(raw)) {
+    return raw.filter((entry) => typeof entry === "string").map((entry) => entry.trim());
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((entry) => typeof entry === "string").map((entry) => entry.trim());
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function parseCandidateInt(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+}
 const AUTONOMY_CONTROL_SCOPE_FIELDS = Object.freeze([
   "id",
   "scope_type",
@@ -3325,39 +3223,81 @@ function evaluateTechnicianZoneMatch(candidate, ticketRegion) {
   return (candidate.zone || "").toUpperCase() === ticketRegion.toUpperCase();
 }
 
-function buildTechnicianRecommendationCandidates(params) {
+async function buildTechnicianRecommendationCandidates(client, params) {
   const { ticketRegion, requestedServiceType, limit } = params;
   const normalizedServiceType = normalizeServiceType(requestedServiceType);
+  const normalizedRegion =
+    typeof ticketRegion === "string" ? ticketRegion.trim().toUpperCase() : null;
+  const regionValue = normalizedRegion === "" ? null : normalizedRegion;
+
+  const result = await client.query(
+    `
+      SELECT
+        t.id AS tech_id,
+        t.name AS tech_name,
+        COALESCE(t.home_region, MAX(NULLIF(ts.region, ''))) AS zone,
+        COALESCE(
+          ARRAY_AGG(DISTINCT tskill.skill) FILTER (WHERE tskill.skill IS NOT NULL AND tskill.skill <> ''),
+          ARRAY[]::text[]
+        ) AS service_types,
+        (
+        SELECT COUNT(*)
+          FROM tickets ot
+          WHERE ot.assigned_tech_id = t.id::uuid
+            AND ot.state NOT IN (SELECT unnest($1::ticket_state[]))
+        )::int AS active_load
+      FROM technicians t
+      LEFT JOIN technician_skills tskill ON tskill.technician_id = t.id
+      LEFT JOIN technician_regions ts ON ts.technician_id = t.id
+      WHERE t.active = TRUE
+        AND EXISTS (
+          SELECT 1
+          FROM technician_skills tmatch
+          WHERE tmatch.technician_id = t.id
+            AND (tmatch.skill = 'DEFAULT' OR tmatch.skill = $2)
+        )
+        AND ($3::text IS NULL OR EXISTS (
+          SELECT 1
+          FROM technician_regions tr_region
+          WHERE tr_region.technician_id = t.id
+            AND upper(NULLIF(tr_region.region, '')) = $3::text
+        ))
+      GROUP BY t.id, t.name, t.home_region
+      ORDER BY
+        tech_id
+    `,
+    [TECHNICIAN_OPEN_WORKLOAD_EXCLUDED_STATES, normalizedServiceType, regionValue],
+  );
 
   const candidates = [];
-  for (const tech of TECHNICIAN_DIRECTORY) {
-    if (
-      !tech ||
-      !tech.tech_id ||
-      typeof tech.active_load !== "number" ||
-      typeof tech.quality_signal !== "number"
-    ) {
-      continue;
-    }
-
-    if (typeof tech.available !== "boolean" || !tech.available) {
-      continue;
-    }
-
-    const capabilityMatch = evaluateTechnicianCapabilityMatch(tech, normalizedServiceType);
-    const zoneMatch = evaluateTechnicianZoneMatch(tech, ticketRegion);
+  for (const row of result.rows) {
+    const serviceTypes = Array.isArray(row.service_types) ? row.service_types : [];
+    const zone = row.zone == null || row.zone === "" ? null : String(row.zone);
+    const capabilityMatch = evaluateTechnicianCapabilityMatch(
+      {
+        tech_id: row.tech_id,
+        service_types: serviceTypes,
+      },
+      requestedServiceType,
+    );
+    const zoneMatch = evaluateTechnicianZoneMatch(
+      {
+        zone,
+      },
+      normalizedRegion,
+    );
+    const activeLoad = Number(row.active_load) || 0;
     const score =
       (capabilityMatch ? RECOMMENDATION_MATCH_WEIGHT.CAPABILITY : 0) +
       (zoneMatch ? RECOMMENDATION_MATCH_WEIGHT.ZONE_MATCH : 0) +
-      (tech.active_load > 0 ? 0 - tech.active_load * RECOMMENDATION_MATCH_WEIGHT.OPEN_LOAD : 0) +
-      (tech.quality_signal || 0) * RECOMMENDATION_MATCH_WEIGHT.QUALITY;
+      (activeLoad > 0 ? 0 - activeLoad * RECOMMENDATION_MATCH_WEIGHT.OPEN_LOAD : 0);
 
     candidates.push({
-      tech_id: tech.tech_id,
-      tech_name: tech.tech_name,
-      zone: tech.zone,
-      active_load: tech.active_load,
-      quality_signal: tech.quality_signal,
+      tech_id: row.tech_id,
+      tech_name: row.tech_name,
+      zone,
+      active_load: activeLoad,
+      quality_signal: 0,
       service_match: capabilityMatch,
       zone_match: zoneMatch,
       score,
@@ -3383,8 +3323,50 @@ function buildTechnicianRecommendationCandidates(params) {
   return sortedCandidates.slice(0, limit);
 }
 
-function findTechnicianById(techId) {
-  return TECHNICIAN_DIRECTORY.find((entry) => entry.tech_id === techId) ?? null;
+async function findTechnicianById(client, techId) {
+  const result = await client.query(
+    `
+      SELECT
+        t.id AS tech_id,
+        t.name AS tech_name,
+        t.active,
+        COALESCE(t.home_region, MAX(NULLIF(tr.region, ''))) AS zone,
+        COALESCE(
+          ARRAY_AGG(DISTINCT tskill.skill) FILTER (WHERE tskill.skill IS NOT NULL AND tskill.skill <> ''),
+          ARRAY[]::text[]
+        ) AS service_types,
+      (
+        SELECT COUNT(*)
+          FROM tickets ot
+          WHERE ot.assigned_tech_id = t.id::uuid
+            AND ot.state NOT IN (SELECT unnest($2::ticket_state[]))
+        )::int AS active_load
+      FROM technicians t
+      LEFT JOIN technician_skills tskill ON tskill.technician_id = t.id
+      LEFT JOIN technician_regions tr ON tr.technician_id = t.id
+      WHERE t.id = $1
+      GROUP BY
+        t.id,
+        t.name,
+        t.active,
+        t.home_region
+    `,
+    [techId, TECHNICIAN_OPEN_WORKLOAD_EXCLUDED_STATES],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    tech_id: row.tech_id,
+    tech_name: row.tech_name,
+    zone: row.zone == null || row.zone === "" ? null : String(row.zone),
+    active_load: Number(row.active_load) || 0,
+    quality_signal: 0,
+    service_types: Array.isArray(row.service_types) ? row.service_types : [],
+    available: row.active === true,
+  };
 }
 
 function parseHoldSnapshotReasonNotes(raw) {
@@ -4832,6 +4814,21 @@ async function dispatchAssignmentMutation(client, context) {
   if (existing.state === "TRIAGED" && dispatchMode === "STANDARD") {
     // TRIAGED dispatch remains explicit and logged as non-bypass dispatch.
   }
+  const requiresEmergencyTriagedReadyStage =
+    existing.state === "TRIAGED" && dispatchMode === "EMERGENCY_BYPASS";
+
+  if (requiresEmergencyTriagedReadyStage) {
+    await client.query(
+      `
+        UPDATE tickets
+        SET
+          state = 'READY_TO_SCHEDULE',
+          version = version + 1
+        WHERE id = $1
+      `,
+      [ticketId],
+    );
+  }
 
   const recommendedSnapshot = recommendationSnapshotId
     ? await getRecommendationSnapshot(client, recommendationSnapshotId, ticketId)
@@ -4848,7 +4845,7 @@ async function dispatchAssignmentMutation(client, context) {
     );
   }
 
-  const selectedTech = findTechnicianById(body.tech_id);
+  const selectedTech = await findTechnicianById(client, body.tech_id);
   if (!selectedTech) {
     throw new HttpError(409, "ASSIGNMENT_NOT_FOUND", "Requested technician was not found", {
       tech_id: body.tech_id,
@@ -4929,19 +4926,26 @@ async function dispatchAssignmentMutation(client, context) {
         state = 'DISPATCHED',
         assigned_tech_id = $2,
         assigned_provider_id = $3,
-        version = version + 1
+        version = version + $4
       WHERE id = $1
       RETURNING *
     `,
-    [ticketId, body.tech_id, body.provider_id ?? null],
+    [ticketId, body.tech_id, body.provider_id ?? null, requiresEmergencyTriagedReadyStage ? 0 : 1],
   );
   const ticket = update.rows[0];
 
-  await insertAuditAndTransition(client, {
+  const dispatchTransitionChain =
+    existing.state === "TRIAGED"
+      ? [
+          { fromState: existing.state, toState: "READY_TO_SCHEDULE" },
+          { fromState: "READY_TO_SCHEDULE", toState: "DISPATCHED" },
+        ]
+      : [{ fromState: existing.state, toState: "DISPATCHED" }];
+
+  const auditEventId = await insertAuditEvent(client, {
     ticketId,
     beforeState: existing.state,
     afterState: "DISPATCHED",
-    metrics,
     actorType: actor.actorType,
     actorId: actor.actorId,
     actorRole: actor.actorRole,
@@ -4965,9 +4969,30 @@ async function dispatchAssignmentMutation(client, context) {
         ...(dispatchMode === "EMERGENCY_BYPASS" && dispatchRationale != null
           ? { dispatch_rationale: dispatchRationale }
           : {}),
+        ...(existing.state === "TRIAGED"
+          ? {
+              derived_transitions: [
+                `${existing.state}->READY_TO_SCHEDULE`,
+                `READY_TO_SCHEDULE->DISPATCHED`,
+              ],
+            }
+          : {}),
       },
     },
+    requestId,
+    correlationId,
+    traceId,
   });
+
+  for (const transition of dispatchTransitionChain) {
+    await insertTransitionRow(client, {
+      ticketId,
+      fromState: transition.fromState,
+      toState: transition.toState,
+      auditEventId,
+      metrics,
+    });
+  }
 
   return {
     status: 200,
@@ -5001,7 +5026,7 @@ async function assignmentRecommendMutation(client, context) {
     );
   }
 
-  const rankedCandidates = buildTechnicianRecommendationCandidates({
+  const rankedCandidates = await buildTechnicianRecommendationCandidates(client, {
     ticketRegion: existing.site_region,
     requestedServiceType: serviceType,
     limit: recommendationLimit,

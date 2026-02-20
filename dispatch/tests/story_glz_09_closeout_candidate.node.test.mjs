@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -332,6 +333,16 @@ test.before(async () => {
     INSERT INTO contacts (site_id, account_id, name, phone, role, is_authorized_requester)
     VALUES ('${siteId}', '${accountId}', 'Alex Dispatcher', '555-0109', 'onsite_contact', true);
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "Story 09 Closeout Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({

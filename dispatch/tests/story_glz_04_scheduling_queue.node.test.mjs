@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -343,6 +344,16 @@ test.before(async () => {
       ('${siteTexasId}', '${accountId}', 'GLZ-04 TX Site', '4 TX Blvd', 'Houston', 'TX'),
       ('${siteNewYorkId}', '${accountId}', 'GLZ-04 NY Site', '4 NY Blvd', 'New York', 'NY');
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: "00000000-0000-0000-0000-000000000901",
+        name: "GLZ-04 Seed Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA", "TX", "NY"],
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({

@@ -7,6 +7,7 @@ import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
 import { DISPATCH_TOOL_POLICIES } from "../shared/authorization-policy.mjs";
 import { makeTestToken } from "./helpers/auth-test-token.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const uxDir = path.resolve(repoRoot, "dispatch/ux");
@@ -604,6 +605,16 @@ test.before(async () => {
     VALUES
       ('${siteId}', '${accountId}', 'Alex Dispatcher', '555-0107', 'onsite_contact', true);
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "Story 10 Dispatch Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({

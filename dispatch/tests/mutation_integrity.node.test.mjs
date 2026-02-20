@@ -8,6 +8,7 @@ import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
 import { DISPATCH_CONTRACT, MUTATING_TOOLS } from "../contracts/dispatch-contract.v1.ts";
 import { makeTestToken } from "./helpers/auth-test-token.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -775,6 +776,17 @@ test.before(async () => {
   psql(`INSERT INTO accounts (id, name) VALUES ('${accountId}', 'Acme Facilities');`);
   psql(
     `INSERT INTO sites (id, account_id, name, address1, city) VALUES ('${siteId}', '${accountId}', 'Main Campus', '1 Main St', 'Springfield');`,
+  );
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: techId,
+        name: "Mutation Integrity Dispatcher",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+        active: true,
+      },
+    ]),
   );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;

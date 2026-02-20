@@ -171,6 +171,38 @@ ALTER TABLE IF EXISTS tickets
 ALTER TABLE IF EXISTS tickets
   ADD COLUMN IF NOT EXISTS assigned_tech_id uuid;
 
+CREATE TABLE IF NOT EXISTS technicians (
+  id text PRIMARY KEY,
+  name text NOT NULL CHECK (length(trim(name)) > 0),
+  active boolean NOT NULL DEFAULT true,
+  home_region text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS technician_skills (
+  technician_id text NOT NULL REFERENCES technicians(id) ON DELETE CASCADE,
+  skill text NOT NULL CHECK (length(trim(skill)) > 0),
+  PRIMARY KEY (technician_id, skill)
+);
+
+CREATE TABLE IF NOT EXISTS technician_regions (
+  technician_id text NOT NULL REFERENCES technicians(id) ON DELETE CASCADE,
+  region text NOT NULL CHECK (length(trim(region)) > 0),
+  PRIMARY KEY (technician_id, region)
+);
+
+CREATE TABLE IF NOT EXISTS technician_availability (
+  technician_id text NOT NULL REFERENCES technicians(id) ON DELETE CASCADE,
+  weekday int NOT NULL CHECK (weekday BETWEEN 0 AND 6),
+  start_time time NOT NULL,
+  end_time time NOT NULL,
+  PRIMARY KEY (technician_id, weekday, start_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_technicians_active ON technicians(active);
+CREATE INDEX IF NOT EXISTS idx_technician_skills ON technician_skills(technician_id, skill);
+CREATE INDEX IF NOT EXISTS idx_technician_regions ON technician_regions(technician_id, region);
+
 CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
 CREATE INDEX IF NOT EXISTS idx_tickets_site ON tickets(site_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id);
@@ -217,7 +249,7 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (
       from_state = 'TRIAGED'
-      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
     )
     OR (
       from_state = 'APPROVAL_REQUIRED'
@@ -286,7 +318,7 @@ BEGIN
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (
       from_state = 'TRIAGED'
-      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
     )
     OR (
       from_state = 'APPROVAL_REQUIRED'

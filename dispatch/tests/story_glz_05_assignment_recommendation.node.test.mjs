@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
+import { buildTechnicianSeedSql } from "./helpers/technicians.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -300,6 +301,34 @@ test.before(async () => {
       ('${siteCaliforniaId}', '${accountId}', 'GLZ-05 CA Site', '5 CA Blvd', 'San Francisco', 'CA'),
       ('${siteTexasId}', '${accountId}', 'GLZ-05 TX Site', '5 TX Blvd', 'Austin', 'TX');
   `);
+  psql(
+    buildTechnicianSeedSql([
+      {
+        id: "00000000-0000-0000-0000-000000000083",
+        name: "GLZ-05 CA Tech A",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+      },
+      {
+        id: "00000000-0000-0000-0000-000000000085",
+        name: "GLZ-05 CA Tech B",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["CA"],
+      },
+      {
+        id: "00000000-0000-0000-0000-000000000143",
+        name: "GLZ-05 Skill-Missing Tech",
+        skills: ["LOCK_REPAIR"],
+        regions: ["CA"],
+      },
+      {
+        id: "00000000-0000-0000-0000-000000000183",
+        name: "GLZ-05 TX Tech",
+        skills: ["DOOR_WONT_LATCH", "DEFAULT"],
+        regions: ["TX"],
+      },
+    ]),
+  );
 
   process.env.DISPATCH_DATABASE_URL = `postgres://dispatch:dispatch@127.0.0.1:${postgresPort}/dispatch`;
   app = await startDispatchApi({
