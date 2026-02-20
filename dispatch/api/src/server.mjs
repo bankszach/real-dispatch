@@ -1440,14 +1440,23 @@ function getCommandPolicy(endpoint) {
   return policy;
 }
 
-const DISPATCH_CONTRACT_BY_ROUTE = Object.freeze(
+const DISPATCH_CONTRACT_BY_METHOD_AND_ROUTE = Object.freeze(
   Object.fromEntries(
-    Object.values(DISPATCH_CONTRACT).map((contract) => [contract.route, contract]),
+    Object.values(DISPATCH_CONTRACT).map((contract) => {
+      const method = String(contract.http_method).toUpperCase();
+      return [`${method}:${contract.route}`, contract];
+    }),
   ),
 );
 
-function getDispatchContractByRoute(route) {
-  return DISPATCH_CONTRACT_BY_ROUTE[route] ?? null;
+function getDispatchContractByRoute(route, method = null) {
+  if (!route || typeof route !== "string") {
+    return null;
+  }
+  if (!method || typeof method !== "string") {
+    return null;
+  }
+  return DISPATCH_CONTRACT_BY_METHOD_AND_ROUTE[`${method.toUpperCase()}:${route}`] ?? null;
 }
 
 function buildContractValidationDetails(contract, payload) {
@@ -1516,7 +1525,7 @@ function assertContractBypassRequirements(contract, payload, actor) {
 }
 
 async function assertCommandContractConformance(params) {
-  const { client, endpoint, ticketId, actor, body, authRuntime, requestId } = params;
+  const { client, endpoint, ticketId, actor, body, authRuntime, requestId, requestMethod } = params;
 
   const policy = getCommandPolicy(endpoint);
   if (!policy.allowed_roles.includes(actor.actorRole)) {
@@ -1532,7 +1541,7 @@ async function assertCommandContractConformance(params) {
     );
   }
 
-  const contract = getDispatchContractByRoute(endpoint);
+  const contract = getDispatchContractByRoute(endpoint, requestMethod);
   if (!contract) {
     throw new HttpError(
       500,
@@ -8843,7 +8852,7 @@ export function createDispatchApiServer(options = {}) {
 
       const body = await parseJsonBody(request);
       actor = authRuntime.resolveActor(request.headers, route);
-      const contract = getDispatchContractByRoute(route.endpoint);
+      const contract = getDispatchContractByRoute(route.endpoint, requestMethod);
       if (!contract) {
         throw new HttpError(500, "INTERNAL_ERROR", "Missing dispatch contract definition");
       }
@@ -8867,6 +8876,7 @@ export function createDispatchApiServer(options = {}) {
               actor,
               body,
               authRuntime,
+              requestMethod,
               requestId,
             });
 
@@ -8896,6 +8906,7 @@ export function createDispatchApiServer(options = {}) {
           actor,
           body,
           authRuntime,
+          requestMethod,
           requestId,
         });
 

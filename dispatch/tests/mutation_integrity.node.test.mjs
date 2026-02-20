@@ -7,6 +7,7 @@ import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
 import { DISPATCH_CONTRACT, MUTATING_TOOLS } from "../contracts/dispatch-contract.v1.ts";
+import { makeTestToken } from "./helpers/auth-test-token.mjs";
 
 const repoRoot = process.cwd();
 const migrationSql = fs.readFileSync(
@@ -21,6 +22,9 @@ const baseUrl = `http://127.0.0.1:${dispatchApiPort}`;
 const accountId = "00000000-0000-0000-0000-000000000001";
 const siteId = "00000000-0000-0000-0000-000000000010";
 const techId = "00000000-0000-0000-0000-000000000099";
+const authJwtSecret = process.env.DISPATCH_AUTH_JWT_SECRET || "dispatch-mutation-integrity-secret";
+const authJwtIssuer = process.env.DISPATCH_AUTH_JWT_ISSUER || "";
+const authJwtAudience = process.env.DISPATCH_AUTH_JWT_AUDIENCE || "";
 
 const CLOSEOUT_TEMPLATE = "DOOR_WONT_LATCH";
 const CLOSEOUT_EVIDENCE_KEYS = [
@@ -38,6 +42,7 @@ const CLOSEOUT_CHECKLIST_KEYS = [
 ];
 
 let app;
+let previousAuthEnv = {};
 
 function run(command, args, input = undefined) {
   const result = spawnSync(command, args, {
@@ -107,8 +112,17 @@ function toolHeaders(toolName, options = {}) {
   } = options;
 
   const headers = {
-    "X-Actor-Id": actorId,
-    "X-Actor-Role": actorRole,
+    Authorization: `Bearer ${makeTestToken({
+      actor_id: actorId,
+      role: actorRole,
+      scope: {
+        account_ids: [accountId],
+        site_ids: [siteId],
+      },
+      secret: authJwtSecret,
+      issuer: authJwtIssuer || undefined,
+      audience: authJwtAudience || undefined,
+    })}`,
     "X-Tool-Name": toolName,
     "X-Correlation-Id": correlationId,
     ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
@@ -249,7 +263,7 @@ async function setupForTool(toolName) {
       description: "Direct create mutation fixture",
       nte_cents: 4000,
     };
-    setup.expectedTransitionCount = 1;
+    setup.expectedTransitionCount = 0;
     setup.expectedHttpStatus = 201;
     return setup;
   }
@@ -264,6 +278,7 @@ async function setupForTool(toolName) {
       priority: "EMERGENCY",
       description: "Blind intake fixture",
       nte_cents: 3500,
+      contact_phone: "+15551230000",
       identity_confidence: 98,
       classification_confidence: 98,
       sop_handoff_acknowledged: true,
@@ -297,6 +312,7 @@ async function setupForTool(toolName) {
         priority: "EMERGENCY",
         incident_type: "DOOR_WONT_LATCH",
         nte_cents: 2000,
+        workflow_outcome: "READY_TO_SCHEDULE",
       });
       setup.setupTicket = ticket;
       setup.payload = {
@@ -467,6 +483,7 @@ async function setupForTool(toolName) {
 
     case "tech.request_change": {
       await seedTicketState(ticket, "IN_PROGRESS");
+      setup.actorRole = "technician";
       setup.setupTicket = ticket;
       setup.payload = {
         approval_type: "NTE_INCREASE",
@@ -482,6 +499,7 @@ async function setupForTool(toolName) {
       const requestChange = await post(
         `/tickets/${ticket.id}/tech/request-change`,
         toolHeaders("tech.request_change", {
+          actorRole: "technician",
           requestId: randomUUID(),
           correlationId: randomUUID(),
           idempotencyKey: randomUUID(),
@@ -681,6 +699,26 @@ async function setupForTool(toolName) {
 }
 
 test.before(async () => {
+  previousAuthEnv = {
+    DISPATCH_AUTH_ALLOW_DEV_HEADERS: process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS,
+    DISPATCH_AUTH_JWT_SECRET: process.env.DISPATCH_AUTH_JWT_SECRET,
+    DISPATCH_AUTH_JWT_ISSUER: process.env.DISPATCH_AUTH_JWT_ISSUER,
+    DISPATCH_AUTH_JWT_AUDIENCE: process.env.DISPATCH_AUTH_JWT_AUDIENCE,
+  };
+
+  process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS = "false";
+  process.env.DISPATCH_AUTH_JWT_SECRET = authJwtSecret;
+  if (authJwtIssuer) {
+    process.env.DISPATCH_AUTH_JWT_ISSUER = authJwtIssuer;
+  } else {
+    delete process.env.DISPATCH_AUTH_JWT_ISSUER;
+  }
+  if (authJwtAudience) {
+    process.env.DISPATCH_AUTH_JWT_AUDIENCE = authJwtAudience;
+  } else {
+    delete process.env.DISPATCH_AUTH_JWT_AUDIENCE;
+  }
+
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
   run("docker", [
     "run",
@@ -751,6 +789,26 @@ test.after(async () => {
     await app.stop();
   }
   await closePool();
+  if (previousAuthEnv.DISPATCH_AUTH_ALLOW_DEV_HEADERS === undefined) {
+    delete process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS;
+  } else {
+    process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS = previousAuthEnv.DISPATCH_AUTH_ALLOW_DEV_HEADERS;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_SECRET === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_SECRET;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_SECRET = previousAuthEnv.DISPATCH_AUTH_JWT_SECRET;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_ISSUER === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_ISSUER;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_ISSUER = previousAuthEnv.DISPATCH_AUTH_JWT_ISSUER;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_AUDIENCE === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_AUDIENCE;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_AUDIENCE = previousAuthEnv.DISPATCH_AUTH_JWT_AUDIENCE;
+  }
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
 });
 

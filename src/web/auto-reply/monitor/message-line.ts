@@ -25,7 +25,8 @@ export function buildInboundLine(params: {
     configured: cfg.channels?.whatsapp?.messagePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
-  const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
+  const normalizedMessagePrefix = messagePrefix === "[dispatch]" ? "[openclaw]" : messagePrefix;
+  const prefixStr = normalizedMessagePrefix ? `${normalizedMessagePrefix} ` : "";
   const replyContext = formatReplyContext(msg);
   const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
 

@@ -217,9 +217,8 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (
       from_state = 'TRIAGED'
-      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
     )
-    OR (from_state = 'TRIAGED' AND to_state = 'DISPATCHED')
     OR (
       from_state = 'APPROVAL_REQUIRED'
       AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
@@ -253,13 +252,9 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
     OR (from_state = 'ON_SITE' AND to_state = 'CANCELLED')
     OR (
       from_state = 'IN_PROGRESS'
-      AND to_state IN (
-        'ON_HOLD',
-        'SCHEDULED',
-        'COMPLETED_PENDING_VERIFICATION',
-        'APPROVAL_REQUIRED'
-      )
+      AND to_state IN ('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED')
     )
+    OR (from_state = 'IN_PROGRESS' AND to_state = 'SCHEDULED')
     OR (from_state = 'IN_PROGRESS' AND to_state = 'CANCELLED')
     OR (
       from_state = 'ON_HOLD'
@@ -271,7 +266,9 @@ CREATE TABLE IF NOT EXISTS ticket_state_transitions (
       AND to_state IN ('VERIFIED', 'CLOSED', 'CANCELLED')
     )
     OR (from_state = 'VERIFIED' AND to_state IN ('INVOICED', 'IN_PROGRESS', 'CLOSED', 'CANCELLED'))
-    OR (from_state = 'INVOICED' AND to_state IN ('CLOSED', 'IN_PROGRESS', 'CANCELLED'))
+    OR (from_state = 'INVOICED' AND to_state = 'CLOSED')
+    OR (from_state = 'INVOICED' AND to_state = 'IN_PROGRESS')
+    OR (from_state = 'INVOICED' AND to_state = 'CANCELLED')
   )
 );
 
@@ -289,9 +286,8 @@ BEGIN
     OR (from_state = 'NEEDS_INFO' AND to_state = 'TRIAGED')
     OR (
       from_state = 'TRIAGED'
-      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE')
+      AND to_state IN ('APPROVAL_REQUIRED', 'READY_TO_SCHEDULE', 'DISPATCHED')
     )
-    OR (from_state = 'TRIAGED' AND to_state = 'DISPATCHED')
     OR (
       from_state = 'APPROVAL_REQUIRED'
       AND to_state IN ('READY_TO_SCHEDULE', 'TRIAGED', 'IN_PROGRESS')
@@ -325,13 +321,9 @@ BEGIN
     OR (from_state = 'ON_SITE' AND to_state = 'CANCELLED')
     OR (
       from_state = 'IN_PROGRESS'
-      AND to_state IN (
-        'ON_HOLD',
-        'SCHEDULED',
-        'COMPLETED_PENDING_VERIFICATION',
-        'APPROVAL_REQUIRED'
-      )
+      AND to_state IN ('ON_HOLD', 'COMPLETED_PENDING_VERIFICATION', 'APPROVAL_REQUIRED')
     )
+    OR (from_state = 'IN_PROGRESS' AND to_state = 'SCHEDULED')
     OR (from_state = 'IN_PROGRESS' AND to_state = 'CANCELLED')
     OR (
       from_state = 'ON_HOLD'
@@ -343,7 +335,9 @@ BEGIN
       AND to_state IN ('VERIFIED', 'CLOSED', 'CANCELLED')
     )
     OR (from_state = 'VERIFIED' AND to_state IN ('INVOICED', 'IN_PROGRESS', 'CLOSED', 'CANCELLED'))
-    OR (from_state = 'INVOICED' AND to_state IN ('CLOSED', 'IN_PROGRESS', 'CANCELLED'))
+    OR (from_state = 'INVOICED' AND to_state = 'CLOSED')
+    OR (from_state = 'INVOICED' AND to_state = 'IN_PROGRESS')
+    OR (from_state = 'INVOICED' AND to_state = 'CANCELLED')
   );
 END $$;
 

@@ -6,6 +6,7 @@ import test from "node:test";
 import { closePool } from "../api/src/db.mjs";
 import { startDispatchApi } from "../api/src/server.mjs";
 import { DISPATCH_TOOL_POLICIES } from "../shared/authorization-policy.mjs";
+import { makeTestToken } from "./helpers/auth-test-token.mjs";
 
 const repoRoot = process.cwd();
 const uxDir = path.resolve(repoRoot, "dispatch/ux");
@@ -28,9 +29,13 @@ const siteId = "00000000-0000-0000-0000-000000000102";
 const outOfScopeAccountId = "00000000-0000-0000-0000-000000000103";
 const outOfScopeSiteId = "00000000-0000-0000-0000-000000000104";
 const techId = "00000000-0000-0000-0000-000000000105";
+const authJwtSecret = process.env.DISPATCH_AUTH_JWT_SECRET || "dispatch-story10-test-secret";
+const authJwtIssuer = process.env.DISPATCH_AUTH_JWT_ISSUER || "";
+const authJwtAudience = process.env.DISPATCH_AUTH_JWT_AUDIENCE || "";
 
 let app;
 let requestCounter = 1;
+let previousAuthEnv = {};
 
 function mustInclude(text, pattern, message) {
   assert.match(text, pattern, message);
@@ -95,21 +100,22 @@ function actorHeaders(params) {
     siteScope = null,
     correlationId = null,
   } = params;
-  const headers = {
-    "X-Actor-Id": actorId,
-    "X-Actor-Role": actorRole,
+  const token = makeTestToken({
+    actor_id: actorId,
+    role: actorRole,
+    scope: {
+      account_ids: accountScope != null ? [accountScope] : [],
+      site_ids: siteScope != null ? [siteScope] : [],
+    },
+    secret: authJwtSecret,
+    issuer: authJwtIssuer || undefined,
+    audience: authJwtAudience || undefined,
+  });
+  return {
+    Authorization: `Bearer ${token}`,
     "X-Tool-Name": toolName,
+    ...(correlationId != null ? { "X-Correlation-Id": correlationId } : {}),
   };
-  if (accountScope != null) {
-    headers["X-Account-Scope"] = accountScope;
-  }
-  if (siteScope != null) {
-    headers["X-Site-Scope"] = siteScope;
-  }
-  if (correlationId != null) {
-    headers["X-Correlation-Id"] = correlationId;
-  }
-  return headers;
 }
 
 async function post(pathname, headers, payload) {
@@ -509,6 +515,26 @@ async function createScheduledTicket() {
 }
 
 test.before(async () => {
+  previousAuthEnv = {
+    DISPATCH_AUTH_ALLOW_DEV_HEADERS: process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS,
+    DISPATCH_AUTH_JWT_SECRET: process.env.DISPATCH_AUTH_JWT_SECRET,
+    DISPATCH_AUTH_JWT_ISSUER: process.env.DISPATCH_AUTH_JWT_ISSUER,
+    DISPATCH_AUTH_JWT_AUDIENCE: process.env.DISPATCH_AUTH_JWT_AUDIENCE,
+  };
+
+  process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS = "false";
+  process.env.DISPATCH_AUTH_JWT_SECRET = authJwtSecret;
+  if (authJwtIssuer) {
+    process.env.DISPATCH_AUTH_JWT_ISSUER = authJwtIssuer;
+  } else {
+    delete process.env.DISPATCH_AUTH_JWT_ISSUER;
+  }
+  if (authJwtAudience) {
+    process.env.DISPATCH_AUTH_JWT_AUDIENCE = authJwtAudience;
+  } else {
+    delete process.env.DISPATCH_AUTH_JWT_AUDIENCE;
+  }
+
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
   run("docker", [
     "run",
@@ -591,6 +617,26 @@ test.after(async () => {
     await app.stop();
   }
   await closePool();
+  if (previousAuthEnv.DISPATCH_AUTH_ALLOW_DEV_HEADERS === undefined) {
+    delete process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS;
+  } else {
+    process.env.DISPATCH_AUTH_ALLOW_DEV_HEADERS = previousAuthEnv.DISPATCH_AUTH_ALLOW_DEV_HEADERS;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_SECRET === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_SECRET;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_SECRET = previousAuthEnv.DISPATCH_AUTH_JWT_SECRET;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_ISSUER === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_ISSUER;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_ISSUER = previousAuthEnv.DISPATCH_AUTH_JWT_ISSUER;
+  }
+  if (previousAuthEnv.DISPATCH_AUTH_JWT_AUDIENCE === undefined) {
+    delete process.env.DISPATCH_AUTH_JWT_AUDIENCE;
+  } else {
+    process.env.DISPATCH_AUTH_JWT_AUDIENCE = previousAuthEnv.DISPATCH_AUTH_JWT_AUDIENCE;
+  }
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
 });
 
@@ -721,14 +767,17 @@ test("dispatcher cockpit fail-closed role and tool errors include policy dimensi
 });
 
 test("unknown role is fail-closed with role policy error", async () => {
-  const unknownRoleBlocked = await get("/ux/dispatcher/cockpit", {
-    "X-Actor-Id": "dispatcher-story10-unknown-role",
-    "X-Actor-Role": "hobbit",
-    "X-Tool-Name": "dispatcher.cockpit",
-    "X-Account-Scope": accountId,
-    "X-Site-Scope": siteId,
-    "X-Correlation-Id": "corr-story10-unknown-role",
-  });
+  const unknownRoleBlocked = await get(
+    "/ux/dispatcher/cockpit",
+    actorHeaders({
+      actorId: "dispatcher-story10-unknown-role",
+      actorRole: "hobbit",
+      toolName: "dispatcher.cockpit",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-unknown-role",
+    }),
+  );
 
   assert.equal(unknownRoleBlocked.status, 401);
   assert.equal(unknownRoleBlocked.body.error.code, "INVALID_AUTH_CLAIMS");
@@ -924,12 +973,14 @@ test("expected-invalid requests never return INTERNAL_ERROR", async () => {
   assert.notEqual(transitionInvalid.body.error.code, "INTERNAL_ERROR");
 
   const unknownRole = await get("/ux/dispatcher/cockpit", {
-    "X-Actor-Id": "dispatcher-story10-unknown-role-contract",
-    "X-Actor-Role": "hobbit",
-    "X-Tool-Name": "dispatcher.cockpit",
-    "X-Account-Scope": accountId,
-    "X-Site-Scope": siteId,
-    "X-Correlation-Id": "corr-story10-unknown-role-contract",
+    ...actorHeaders({
+      actorId: "dispatcher-story10-unknown-role-contract",
+      actorRole: "hobbit",
+      toolName: "dispatcher.cockpit",
+      accountScope: accountId,
+      siteScope: siteId,
+      correlationId: "corr-story10-unknown-role-contract",
+    }),
   });
   assert.equal(unknownRole.status, 401);
   assert.equal(unknownRole.body.error.code, "INVALID_AUTH_CLAIMS");

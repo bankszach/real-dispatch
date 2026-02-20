@@ -27,3 +27,7 @@ File handoff naming pattern for active workstream:
 1. Establish the single sprint truth surface and repoint all current-work logs.
 2. Enforce file-handoff naming format with both docs + verification.
 3. Complete one minimal Temporal end-to-end spike (schedule hold → release) via stub activity adapter.
+
+Sprint-1 invariant note:
+
+- Inbound formatting maps `[dispatch]` → `[openclaw]` for web inbound display; dispatch internals remain unchanged.

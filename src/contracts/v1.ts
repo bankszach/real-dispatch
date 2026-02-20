@@ -1,6 +1,6 @@
 // Real Dispatch core contracts (v1).
 // Source of truth: docs/rfcs/0002-dispatch-operating-model-v1.md
-import { MUTATING_TOOLS as DISPATCH_MUTATING_TOOLS } from "../dispatch/contracts/dispatch-contract.v1.ts";
+import { MUTATING_TOOLS } from "../../dispatch/contracts/dispatch-contract.v1.ts";
 
 export const ContractVersion = "v1" as const;
 
@@ -520,7 +520,7 @@ const DispatchMutationActionsLegacy = [
 ] as const;
 const dispatchMutationActionLegacySet = new Set(DispatchMutationActionsLegacy);
 export const DispatchMutationActions = [
-  ...DISPATCH_MUTATING_TOOLS,
+  ...MUTATING_TOOLS,
   ...DispatchMutationActionsLegacy.filter((action) => !dispatchMutationActionLegacySet.has(action)),
 ] as const;
 export type DispatchMutationAction = (typeof DispatchMutationActions)[number];

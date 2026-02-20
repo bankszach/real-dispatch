@@ -4,7 +4,7 @@ import type { loadConfig } from "../../../config/config.js";
 import type { getChildLogger } from "../../../logging.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import type { WebInboundMsg } from "../types.js";
-import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
+import { resolveAgentIdentity } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import {
@@ -255,20 +255,30 @@ export async function processMessage(params: {
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const configuredAgentIdentity = resolveAgentIdentity(
+    params.cfg,
+    params.route.agentId,
+  )?.name?.trim();
+  const normalizedDefaultIdentity =
+    configuredAgentIdentity?.toLowerCase() === "dispatch" ? "openclaw" : configuredAgentIdentity;
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.route.agentId,
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
+  const resolvedResponsePrefix =
+    prefixOptions.responsePrefix === "[dispatch]" ? "[openclaw]" : prefixOptions.responsePrefix;
   const isSelfChat =
     params.msg.chatType !== "group" &&
     Boolean(params.msg.selfE164) &&
     normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
   const responsePrefix =
-    prefixOptions.responsePrefix ??
+    resolvedResponsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
+      ? normalizedDefaultIdentity
+        ? `[${normalizedDefaultIdentity}]`
+        : "[openclaw]"
       : undefined);
 
   const ctxPayload = finalizeInboundContext({
