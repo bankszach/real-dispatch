@@ -61,7 +61,53 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function psql(sql) {
+async function ensureStory10PostgresContainer() {
+  const inspect = spawnSync("docker", ["inspect", "-f", "{{.State.Running}}", postgresContainer], {
+    encoding: "utf8",
+  });
+
+  if (inspect.status === 0) {
+    const isRunning = inspect.stdout.trim() === "true";
+    if (!isRunning) {
+      run("docker", ["start", postgresContainer]);
+    }
+  } else {
+    run("docker", [
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      postgresContainer,
+      "-e",
+      "POSTGRES_USER=dispatch",
+      "-e",
+      "POSTGRES_PASSWORD=dispatch",
+      "-e",
+      "POSTGRES_DB=dispatch",
+      "-p",
+      `${postgresPort}:5432`,
+      "postgres:16",
+    ]);
+  }
+
+  for (let i = 0; i < 60; i += 1) {
+    const probe = spawnSync(
+      "docker",
+      ["exec", postgresContainer, "pg_isready", "-U", "dispatch", "-d", "dispatch"],
+      { encoding: "utf8" },
+    );
+    if (probe.status === 0) {
+      return;
+    }
+    await sleep(500);
+  }
+
+  throw new Error("Story 10 Postgres container failed to start");
+}
+
+async function psql(sql) {
+  await ensureStory10PostgresContainer();
+
   return run("docker", [
     "exec",
     "-i",
@@ -537,39 +583,7 @@ test.before(async () => {
   }
 
   spawnSync("docker", ["rm", "-f", postgresContainer], { encoding: "utf8" });
-  run("docker", [
-    "run",
-    "--rm",
-    "-d",
-    "--name",
-    postgresContainer,
-    "-e",
-    "POSTGRES_USER=dispatch",
-    "-e",
-    "POSTGRES_PASSWORD=dispatch",
-    "-e",
-    "POSTGRES_DB=dispatch",
-    "-p",
-    `${postgresPort}:5432`,
-    "postgres:16",
-  ]);
-
-  let ready = false;
-  for (let i = 0; i < 30; i += 1) {
-    const probe = spawnSync(
-      "docker",
-      ["exec", postgresContainer, "pg_isready", "-U", "dispatch", "-d", "dispatch"],
-      { encoding: "utf8" },
-    );
-    if (probe.status === 0) {
-      ready = true;
-      break;
-    }
-    await sleep(500);
-  }
-  if (!ready) {
-    throw new Error("Postgres container did not become ready");
-  }
+  await ensureStory10PostgresContainer();
 
   run(
     "docker",
@@ -588,24 +602,24 @@ test.before(async () => {
     migrationSql,
   );
 
-  psql(`
+  await psql(`
     INSERT INTO accounts (id, name)
     VALUES
       ('${accountId}', 'Story 10 In Scope Account'),
       ('${outOfScopeAccountId}', 'Story 10 Out Of Scope Account');
   `);
-  psql(`
+  await psql(`
     INSERT INTO sites (id, account_id, name, address1, city, region, postal_code, access_instructions)
     VALUES
       ('${siteId}', '${accountId}', 'Story 10 Site', '10 Main St', 'Springfield', 'CA', '94016', 'Rear gate keypad 4472'),
       ('${outOfScopeSiteId}', '${outOfScopeAccountId}', 'Story 10 OOS Site', '11 Main St', 'Shelbyville', 'CA', '94017', 'Use front desk');
   `);
-  psql(`
+  await psql(`
     INSERT INTO contacts (site_id, account_id, name, phone, role, is_authorized_requester)
     VALUES
       ('${siteId}', '${accountId}', 'Alex Dispatcher', '555-0107', 'onsite_contact', true);
   `);
-  psql(
+  await psql(
     buildTechnicianSeedSql([
       {
         id: techId,

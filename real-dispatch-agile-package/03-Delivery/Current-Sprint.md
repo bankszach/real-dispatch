@@ -24,9 +24,9 @@ File handoff naming pattern for active workstream:
 
 ## Current execution focus
 
-1. Establish the single sprint truth surface and repoint all current-work logs.
-2. Enforce file-handoff naming format with both docs + verification.
-3. Complete one minimal Temporal end-to-end spike (schedule hold → release) via stub activity adapter.
+1. Communications outbox (Sprint 3): introduce transactional dispatch-side message outbox with deterministic delivery worker.
+2. Keep scope single-channel (SMS first), idempotent send keys, deterministic retries, and DLQ.
+3. Preserve strict dispatch invariants and no additional channel abstractions in this phase.
 
 Sprint-1 invariant note:
 
@@ -41,3 +41,5 @@ Sprint-1 invariant note:
   - no communications rollout
   - no autonomy expansion
   - no external SaaS wiring
+
+Status: complete (2026-02-20).
