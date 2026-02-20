@@ -118,7 +118,7 @@ function ensureMutatingAuthority() {
     );
   }
   if (
-    !/import\s*\{[\s\S]*?MUTATING_TOOLS[\s\S]*\}\s*from\s*["']\.\.\/\.\.\/dispatch\/contracts\/dispatch-contract\.v1\.ts["']/u.test(
+    !/import\s*\{[\s\S]*?MUTATING_TOOLS[\s\S]*\}\s*from\s*["']\.\.\/(?:\.\.\/)?dispatch\/contracts\/dispatch-contract\.v1\.ts["']/u.test(
       readFileSync(resolve(ROOT, "src/contracts/v1.ts"), "utf8"),
     )
   ) {
