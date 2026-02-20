@@ -89,6 +89,7 @@ export default function register(api: {
       "Read dispatcher cockpit queue and mapped action surface via dispatch-api.",
     "tech.job_packet":
       "Read technician packet, timeline, evidence, and closeout gate status via dispatch-api.",
+    "outbox.replay": "Replay dead-lettered dispatch outbox messages via dispatch-api.",
   } as const;
 
   const asOpenAIFriendlyToolName = (toolName: string) => toolName.replace(/\./g, "_");

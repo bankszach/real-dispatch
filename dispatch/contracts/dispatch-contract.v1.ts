@@ -671,6 +671,22 @@ export const DISPATCH_CONTRACT = {
     payload_schema: Type.Object({}, { additionalProperties: false }),
     bypass_requirements: null,
   },
+  "outbox.replay": {
+    tool_name: "outbox.replay",
+    http_method: "POST",
+    route: "/outbox/replay",
+    allowed_roles: ["finance", "admin"],
+    allowed_from_states: null,
+    resulting_state: null,
+    idempotency_required: true,
+    payload_schema: Type.Object(
+      {
+        outbox_id: uuidSchema,
+      },
+      { additionalProperties: true },
+    ),
+    bypass_requirements: null,
+  },
   "ops.autonomy.replay": {
     tool_name: "ops.autonomy.replay",
     http_method: "GET",

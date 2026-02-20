@@ -565,6 +565,25 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_ticket_created ON messages(ticket_id, created_at);
 
+CREATE TABLE IF NOT EXISTS dispatch_outbox (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  aggregate_type text NOT NULL,
+  aggregate_id text NOT NULL,
+  event_type text NOT NULL,
+  payload jsonb NOT NULL,
+  idempotency_key text NOT NULL,
+  status text NOT NULL DEFAULT 'PENDING',
+  attempt_count int NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS dispatch_outbox_ready_idx
+  ON dispatch_outbox (status, next_attempt_at);
+
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql

@@ -11,10 +11,12 @@ export const DISPATCH_CANONICAL_ROLES = Object.freeze({
   APPROVER: "approver",
   QA: "qa",
   FINANCE: "finance",
+  ADMIN: "admin",
 });
 
 export const DISPATCH_ROLE_ALIASES = Object.freeze({
   dispatcher: "dispatcher",
+  admin: "admin",
   technician: "technician",
   tech: "technician",
   audit: "audit",

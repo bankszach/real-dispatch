@@ -599,3 +599,87 @@ test("canonical emergency scenario passes command-only with fail-closed missing-
     .filter(Boolean);
   assert.deepEqual(checkInTransitions, ["DISPATCHED->ON_SITE:1", "ON_SITE->IN_PROGRESS:1"]);
 });
+
+test("schedule.confirm writes outbox row", async () => {
+  const ticket = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "ticket.create",
+    actorId: "dispatcher-story08-schedule",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    requestId: "81000000-0000-4000-8000-000000001111",
+    correlationId,
+    payload: {
+      account_id: accountId,
+      site_id: siteId,
+      summary: "Outbox coverage schedule confirm",
+      description: "Story 08 outbox confirmation probe",
+    },
+  });
+
+  assert.equal(ticket.status, 201);
+  const ticketId = ticket.data.id;
+  assert.ok(isUuid(ticketId));
+
+  const triage = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "ticket.triage",
+    actorId: "dispatcher-story08-schedule",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    requestId: "81000000-0000-4000-8000-000000001112",
+    correlationId,
+    ticketId,
+    payload: {
+      priority: "EMERGENCY",
+      incident_type: "CANNOT_SECURE_ENTRY",
+      nte_cents: 30000,
+    },
+  });
+  assert.equal(triage.status, 200);
+  assert.equal(triage.data.state, "TRIAGED");
+
+  const propose = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "schedule.propose",
+    actorId: "dispatcher-story08-schedule",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    requestId: "81000000-0000-4000-8000-000000001113",
+    correlationId,
+    ticketId,
+    payload: {
+      options: [{ start: "2026-02-18T10:00:00.000Z", end: "2026-02-18T11:00:00.000Z" }],
+    },
+  });
+  assert.equal(propose.status, 200);
+
+  const confirm = await invokeDispatchAction({
+    baseUrl: dispatchApiBaseUrl,
+    toolName: "schedule.confirm",
+    actorId: "dispatcher-story08-schedule",
+    actorRole: "dispatcher",
+    actorType: "AGENT",
+    requestId: "81000000-0000-4000-8000-000000001114",
+    correlationId,
+    ticketId,
+    payload: {
+      start: "2026-02-18T10:00:00.000Z",
+      end: "2026-02-18T11:00:00.000Z",
+    },
+  });
+  assert.equal(confirm.status, 200);
+  assert.equal(confirm.data.state, "SCHEDULED");
+
+  const outboxRows = Number(
+    psql(`
+      SELECT count(*)
+      FROM dispatch_outbox
+      WHERE aggregate_type = 'ticket'
+        AND aggregate_id = '${ticketId}'
+        AND event_type = 'schedule.confirm.sms'
+        AND status = 'PENDING';
+    `),
+  );
+  assert.equal(outboxRows, 1);
+});
